@@ -101,7 +101,7 @@ elif opcion == "3. Alojar Lote":
         st.warning("Primero debes crear un galpón.")
 
 # ---------------------------------------------------------
-# 4. INGRESO DIARIO
+# 4. INGRESO DIARIO (Búsqueda y Edición de Registros Existentes)
 # ---------------------------------------------------------
 elif opcion == "4. Ingreso Diario":
     st.header("4. Registro Diario del Galpón")
@@ -128,39 +128,62 @@ elif opcion == "4. Ingreso Diario":
         else:
             st.info(f"📅 **Día de Vida (Edad) calculado:** Día {dia_vida_calculado} (Encaste: {fecha_encaste})")
             
+            # Consultar si ya existe un registro previo para este lote y fecha
+            res_existente = supabase.table("registros_diarios") \
+                .select("*") \
+                .eq("lote_id", lote_info["id"]) \
+                .eq("fecha", str(fecha_registro)) \
+                .execute()
+            
+            registro_previo = res_existente.data[0] if res_existente.data else None
+            
+            if registro_previo:
+                st.warning(f"⚠️ Ya existe un registro para la fecha {fecha_registro}. Puedes modificar los valores a continuación para actualizarlo.")
+            
             # Recuperar población inicial sexada para cálculo de %
             pob_h = lote_info.get("aves_hembra", 0) or 1
             pob_m = lote_info.get("aves_macho", 0) or 1
 
-            # Clave dinámica para reiniciar los inputs a 0 cada vez que cambie la fecha o el lote
+            # Clave única para refrescar adecuadamente los inputs cuando cambia la fecha o lote
             key_prefix = f"{lote_info['id']}_{str(fecha_registro)}"
+
+            # Extraer valores por defecto (si existen) o usar 0
+            def_mh = int(registro_previo.get("mortalidad_hembra", 0)) if registro_previo else 0
+            def_mm = int(registro_previo.get("mortalidad_macho", 0)) if registro_previo else 0
+            def_dh = int(registro_previo.get("descarte_hembra", 0)) if registro_previo else 0
+            def_dm = int(registro_previo.get("descarte_macho", 0)) if registro_previo else 0
+            def_ali = float(registro_previo.get("consumo_alimento_kg", 0.0)) if registro_previo else 0.0
+            def_agu = float(registro_previo.get("consumo_agua_litros", 0.0)) if registro_previo else 0.0
+            def_ph = float(registro_previo.get("peso_promedio_hembra_g", 0.0)) if registro_previo else 0.0
+            def_pm = float(registro_previo.get("peso_promedio_macho_g", 0.0)) if registro_previo else 0.0
+            def_pmix = float(registro_previo.get("peso_promedio_mixto_g", 0.0)) if registro_previo else 0.0
 
             st.subheader("Mortalidad y Descartes Sexados")
             c1, c2, c3, c4 = st.columns(4)
             
             with c1:
-                mort_h = st.number_input("Mortalidad Hembras", min_value=0, step=1, value=0, key=f"mh_{key_prefix}")
+                mort_h = st.number_input("Mortalidad Hembras", min_value=0, step=1, value=def_mh, key=f"mh_{key_prefix}")
                 pct_mort_h = (mort_h / pob_h) * 100
                 st.caption(f"**{pct_mort_h:.2f}%** del total hembras")
                 if pct_mort_h > 1.0:
                     st.warning("⚠️ % Mortalidad alto. Revisa el valor ingresado.")
                     
             with c2:
-                mort_m = st.number_input("Mortalidad Machos", min_value=0, step=1, value=0, key=f"mm_{key_prefix}")
+                mort_m = st.number_input("Mortalidad Machos", min_value=0, step=1, value=def_mm, key=f"mm_{key_prefix}")
                 pct_mort_m = (mort_m / pob_m) * 100
                 st.caption(f"**{pct_mort_m:.2f}%** del total machos")
                 if pct_mort_m > 1.0:
                     st.warning("⚠️ % Mortalidad alto. Revisa el valor ingresado.")
                     
             with c3:
-                desc_h = st.number_input("Descarte Hembras", min_value=0, step=1, value=0, key=f"dh_{key_prefix}")
+                desc_h = st.number_input("Descarte Hembras", min_value=0, step=1, value=def_dh, key=f"dh_{key_prefix}")
                 pct_desc_h = (desc_h / pob_h) * 100
                 st.caption(f"**{pct_desc_h:.2f}%** del total hembras")
                 if pct_desc_h > 1.0:
                     st.warning("⚠️ % Descarte alto. Revisa el valor ingresado.")
                     
             with c4:
-                desc_m = st.number_input("Descarte Machos", min_value=0, step=1, value=0, key=f"dm_{key_prefix}")
+                desc_m = st.number_input("Descarte Machos", min_value=0, step=1, value=def_dm, key=f"dm_{key_prefix}")
                 pct_desc_m = (desc_m / pob_m) * 100
                 st.caption(f"**{pct_desc_m:.2f}%** del total machos")
                 if pct_desc_m > 1.0:
@@ -169,20 +192,22 @@ elif opcion == "4. Ingreso Diario":
             st.subheader("Consumos")
             c5, c6 = st.columns(2)
             with c5:
-                alimento = st.number_input("Consumo Alimento (kg)", min_value=0.0, step=10.0, value=0.0, key=f"ali_{key_prefix}")
+                alimento = st.number_input("Consumo Alimento (kg)", min_value=0.0, step=10.0, value=def_ali, key=f"ali_{key_prefix}")
             with c6:
-                agua = st.number_input("Consumo Agua (Litros)", min_value=0.0, step=50.0, value=0.0, key=f"agu_{key_prefix}")
+                agua = st.number_input("Consumo Agua (Litros)", min_value=0.0, step=50.0, value=def_agu, key=f"agu_{key_prefix}")
                 
             st.subheader("Pesajes (Gramos)")
             c7, c8, c9 = st.columns(3)
             with c7:
-                peso_h = st.number_input("Peso Promedio Hembras (g)", min_value=0.0, step=1.0, value=0.0, key=f"ph_{key_prefix}")
+                peso_h = st.number_input("Peso Promedio Hembras (g)", min_value=0.0, step=1.0, value=def_ph, key=f"ph_{key_prefix}")
             with c8:
-                peso_m = st.number_input("Peso Promedio Machos (g)", min_value=0.0, step=1.0, value=0.0, key=f"pm_{key_prefix}")
+                peso_m = st.number_input("Peso Promedio Machos (g)", min_value=0.0, step=1.0, value=def_pm, key=f"pm_{key_prefix}")
             with c9:
-                peso_mix = st.number_input("Peso Promedio Mixto (g)", min_value=0.0, step=1.0, value=0.0, key=f"pmix_{key_prefix}")
+                peso_mix = st.number_input("Peso Promedio Mixto (g)", min_value=0.0, step=1.0, value=def_pmix, key=f"pmix_{key_prefix}")
                 
-            if st.button("Guardar Registro Diario", key=f"btn_{key_prefix}"):
+            btn_label = "Actualizar Registro Diario" if registro_previo else "Guardar Registro Diario"
+            
+            if st.button(btn_label, key=f"btn_{key_prefix}"):
                 reg = {
                     "lote_id": lote_info["id"],
                     "fecha": str(fecha_registro),
@@ -198,10 +223,15 @@ elif opcion == "4. Ingreso Diario":
                     "peso_promedio_macho_g": peso_m,
                     "peso_promedio_mixto_g": peso_mix
                 }
-                supabase.table("registros_diarios").insert(reg).execute()
-                st.success(f"¡Registro del Día {dia_vida_calculado} guardado exitosamente!")
-    else:
-        st.info("No hay lotes activos. Ve a '3. Alojar Lote' para registrar uno.")
+                
+                if registro_previo:
+                    # Actualizar registro existente por ID
+                    supabase.table("registros_diarios").update(reg).eq("id", registro_previo["id"]).execute()
+                    st.success(f"¡Registro del Día {dia_vida_calculado} actualizado con éxito!")
+                else:
+                    # Crear nuevo registro
+                    supabase.table("registros_diarios").insert(reg).execute()
+                    st.success(f"¡Registro del Día {dia_vida_calculado} guardado exitosamente!")
 
 # ---------------------------------------------------------
 # 5. DASHBOARD GERENCIAL
