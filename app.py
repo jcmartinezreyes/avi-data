@@ -101,11 +101,11 @@ elif opcion == "3. Alojar Lote":
         st.warning("Primero debes crear un galpón.")
 
 # ---------------------------------------------------------
-# 4. INGRESO DIARIO (Cálculo automático de Día de Vida)
+# 4. INGRESO DIARIO
 # ---------------------------------------------------------
 elif opcion == "4. Ingreso Diario":
     st.header("4. Registro Diario del Galpón")
-    res_lotes = supabase.table("lotes").select("id, codigo_lote, linea_genetica, fecha_encaste, galpones(nombre)").eq("activo", True).execute()
+    res_lotes = supabase.table("lotes").select("id, codigo_lote, linea_genetica, fecha_encaste, aves_hembra, aves_macho, galpones(nombre)").eq("activo", True).execute()
     
     if res_lotes.data:
         lotes_dict = {
@@ -128,29 +128,55 @@ elif opcion == "4. Ingreso Diario":
         else:
             st.info(f"📅 **Día de Vida (Edad) calculado:** Día {dia_vida_calculado} (Encaste: {fecha_encaste})")
             
-            st.subheader("Mortalidad y Descartes")
-            c1, c2, c3 = st.columns(3)
+            # Recuperar población inicial sexada para cálculo de %
+            pob_h = lote_info.get("aves_hembra", 0) or 1
+            pob_m = lote_info.get("aves_macho", 0) or 1
+
+            st.subheader("Mortalidad y Descartes Sexados")
+            c1, c2, c3, c4 = st.columns(4)
+            
             with c1:
                 mort_h = st.number_input("Mortalidad Hembras", min_value=0, step=1)
+                pct_mort_h = (mort_h / pob_h) * 100
+                st.caption(f"**{pct_mort_h:.2f}%** del total hembras")
+                if pct_mort_h > 1.0:
+                    st.warning("⚠️ % Mortalidad alto. Revisa el valor ingresado.")
+                    
             with c2:
                 mort_m = st.number_input("Mortalidad Machos", min_value=0, step=1)
+                pct_mort_m = (mort_m / pob_m) * 100
+                st.caption(f"**{pct_mort_m:.2f}%** del total machos")
+                if pct_mort_m > 1.0:
+                    st.warning("⚠️ % Mortalidad alto. Revisa el valor ingresado.")
+                    
             with c3:
-                descartes = st.number_input("Descartes Totales", min_value=0, step=1)
+                desc_h = st.number_input("Descarte Hembras", min_value=0, step=1)
+                pct_desc_h = (desc_h / pob_h) * 100
+                st.caption(f"**{pct_desc_h:.2f}%** del total hembras")
+                if pct_desc_h > 1.0:
+                    st.warning("⚠️ % Descarte alto. Revisa el valor ingresado.")
+                    
+            with c4:
+                desc_m = st.number_input("Descarte Machos", min_value=0, step=1)
+                pct_desc_m = (desc_m / pob_m) * 100
+                st.caption(f"**{pct_desc_m:.2f}%** del total machos")
+                if pct_desc_m > 1.0:
+                    st.warning("⚠️ % Descarte alto. Revisa el valor ingresado.")
                 
             st.subheader("Consumos")
-            c4, c5 = st.columns(2)
-            with c4:
-                alimento = st.number_input("Consumo Alimento (kg)", min_value=0.0, step=10.0)
+            c5, c6 = st.columns(2)
             with c5:
+                alimento = st.number_input("Consumo Alimento (kg)", min_value=0.0, step=10.0)
+            with c6:
                 agua = st.number_input("Consumo Agua (Litros)", min_value=0.0, step=50.0)
                 
             st.subheader("Pesajes (Gramos)")
-            c6, c7, c8 = st.columns(3)
-            with c6:
-                peso_h = st.number_input("Peso Promedio Hembras (g)", min_value=0.0, step=1.0)
+            c7, c8, c9 = st.columns(3)
             with c7:
-                peso_m = st.number_input("Peso Promedio Machos (g)", min_value=0.0, step=1.0)
+                peso_h = st.number_input("Peso Promedio Hembras (g)", min_value=0.0, step=1.0)
             with c8:
+                peso_m = st.number_input("Peso Promedio Machos (g)", min_value=0.0, step=1.0)
+            with c9:
                 peso_mix = st.number_input("Peso Promedio Mixto (g)", min_value=0.0, step=1.0)
                 
             if st.button("Guardar Registro Diario"):
@@ -160,7 +186,9 @@ elif opcion == "4. Ingreso Diario":
                     "dia_vida": int(dia_vida_calculado),
                     "mortalidad_hembra": mort_h,
                     "mortalidad_macho": mort_m,
-                    "descartes": descartes,
+                    "descarte_hembra": desc_h,
+                    "descarte_macho": desc_m,
+                    "descartes": desc_h + desc_m,
                     "consumo_alimento_kg": alimento,
                     "consumo_agua_litros": agua,
                     "peso_promedio_hembra_g": peso_h,
