@@ -5,8 +5,8 @@ from streamlit_folium import st_folium
 import folium
 
 # Conexión a Supabase
-URL = "TU_SUPABASE_URL"
-KEY = "TU_SUPABASE_KEY"
+URL = "https://zmpqrcqadrxevqyshvak.supabase.co"
+KEY = "sb_publishable_--thXNjoDX0MmxrcOBFCLg_Lo5hHeCG"
 supabase = create_client(URL, KEY)
 
 st.title("Sistema de Control Avícola 🐔")
