@@ -101,60 +101,74 @@ elif opcion == "3. Alojar Lote":
         st.warning("Primero debes crear un galpón.")
 
 # ---------------------------------------------------------
-# 4. INGRESO DIARIO
+# 4. INGRESO DIARIO (Cálculo automático de Día de Vida)
 # ---------------------------------------------------------
 elif opcion == "4. Ingreso Diario":
     st.header("4. Registro Diario del Galpón")
-    res_lotes = supabase.table("lotes").select("id, codigo_lote, linea_genetica, galpones(nombre)").eq("activo", True).execute()
+    res_lotes = supabase.table("lotes").select("id, codigo_lote, linea_genetica, fecha_encaste, galpones(nombre)").eq("activo", True).execute()
     
     if res_lotes.data:
-        dict_lotes = {f"{l['codigo_lote']} ({l['galpones']['nombre']} - {l['linea_genetica']})": l["id"] for l in res_lotes.data}
-        lote_sel = st.selectbox("Seleccionar Lote Activo", list(dict_lotes.keys()))
+        lotes_dict = {
+            f"{l['codigo_lote']} ({l['galpones']['nombre']} - {l['linea_genetica']})": l 
+            for l in res_lotes.data
+        }
         
-        fecha = st.date_input("Fecha del Registro")
-        dia_vida = st.number_input("Día de Vida (Edad)", min_value=1, value=1, step=1)
+        lote_sel_nombre = st.selectbox("Seleccionar Lote Activo", list(lotes_dict.keys()))
+        lote_info = lotes_dict[lote_sel_nombre]
         
-        st.subheader("Mortalidad y Descartes")
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            mort_h = st.number_input("Mortalidad Hembras", min_value=0, step=1)
-        with c2:
-            mort_m = st.number_input("Mortalidad Machos", min_value=0, step=1)
-        with c3:
-            descartes = st.number_input("Descartes Totales", min_value=0, step=1)
+        fecha_registro = st.date_input("Fecha del Registro")
+        
+        # CÁLCULO AUTOMÁTICO DEL DÍA DE VIDA
+        fecha_encaste = pd.to_datetime(lote_info["fecha_encaste"]).date()
+        dias_diferencia = (fecha_registro - fecha_encaste).days
+        dia_vida_calculado = dias_diferencia + 1
+        
+        if dia_vida_calculado < 1:
+            st.error(f"La fecha de registro ({fecha_registro}) no puede ser anterior a la fecha de encaste del lote ({fecha_encaste}).")
+        else:
+            st.info(f"📅 **Día de Vida (Edad) calculado:** Día {dia_vida_calculado} (Encaste: {fecha_encaste})")
             
-        st.subheader("Consumos")
-        c4, c5 = st.columns(2)
-        with c4:
-            alimento = st.number_input("Consumo Alimento (kg)", min_value=0.0, step=10.0)
-        with c5:
-            agua = st.number_input("Consumo Agua (Litros)", min_value=0.0, step=50.0)
-            
-        st.subheader("Pesajes (Gramos)")
-        c6, c7, c8 = st.columns(3)
-        with c6:
-            peso_h = st.number_input("Peso Promedio Hembras (g)", min_value=0.0, step=1.0)
-        with c7:
-            peso_m = st.number_input("Peso Promedio Machos (g)", min_value=0.0, step=1.0)
-        with c8:
-            peso_mix = st.number_input("Peso Promedio Mixto (g)", min_value=0.0, step=1.0)
-            
-        if st.button("Guardar Registro Diario"):
-            reg = {
-                "lote_id": dict_lotes[lote_sel],
-                "fecha": str(fecha),
-                "dia_vida": dia_vida,
-                "mortalidad_hembra": mort_h,
-                "mortalidad_macho": mort_m,
-                "descartes": descartes,
-                "consumo_alimento_kg": alimento,
-                "consumo_agua_litros": agua,
-                "peso_promedio_hembra_g": peso_h,
-                "peso_promedio_macho_g": peso_m,
-                "peso_promedio_mixto_g": peso_mix
-            }
-            supabase.table("registros_diarios").insert(reg).execute()
-            st.success("Registro diario guardado correctamente.")
+            st.subheader("Mortalidad y Descartes")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                mort_h = st.number_input("Mortalidad Hembras", min_value=0, step=1)
+            with c2:
+                mort_m = st.number_input("Mortalidad Machos", min_value=0, step=1)
+            with c3:
+                descartes = st.number_input("Descartes Totales", min_value=0, step=1)
+                
+            st.subheader("Consumos")
+            c4, c5 = st.columns(2)
+            with c4:
+                alimento = st.number_input("Consumo Alimento (kg)", min_value=0.0, step=10.0)
+            with c5:
+                agua = st.number_input("Consumo Agua (Litros)", min_value=0.0, step=50.0)
+                
+            st.subheader("Pesajes (Gramos)")
+            c6, c7, c8 = st.columns(3)
+            with c6:
+                peso_h = st.number_input("Peso Promedio Hembras (g)", min_value=0.0, step=1.0)
+            with c7:
+                peso_m = st.number_input("Peso Promedio Machos (g)", min_value=0.0, step=1.0)
+            with c8:
+                peso_mix = st.number_input("Peso Promedio Mixto (g)", min_value=0.0, step=1.0)
+                
+            if st.button("Guardar Registro Diario"):
+                reg = {
+                    "lote_id": lote_info["id"],
+                    "fecha": str(fecha_registro),
+                    "dia_vida": int(dia_vida_calculado),
+                    "mortalidad_hembra": mort_h,
+                    "mortalidad_macho": mort_m,
+                    "descartes": descartes,
+                    "consumo_alimento_kg": alimento,
+                    "consumo_agua_litros": agua,
+                    "peso_promedio_hembra_g": peso_h,
+                    "peso_promedio_macho_g": peso_m,
+                    "peso_promedio_mixto_g": peso_mix
+                }
+                supabase.table("registros_diarios").insert(reg).execute()
+                st.success(f"¡Registro del Día {dia_vida_calculado} guardado exitosamente!")
     else:
         st.info("No hay lotes activos. Ve a '3. Alojar Lote' para registrar uno.")
 
