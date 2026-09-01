@@ -132,32 +132,35 @@ elif opcion == "4. Ingreso Diario":
             pob_h = lote_info.get("aves_hembra", 0) or 1
             pob_m = lote_info.get("aves_macho", 0) or 1
 
+            # Clave dinámica para reiniciar los inputs a 0 cada vez que cambie la fecha o el lote
+            key_prefix = f"{lote_info['id']}_{str(fecha_registro)}"
+
             st.subheader("Mortalidad y Descartes Sexados")
             c1, c2, c3, c4 = st.columns(4)
             
             with c1:
-                mort_h = st.number_input("Mortalidad Hembras", min_value=0, step=1)
+                mort_h = st.number_input("Mortalidad Hembras", min_value=0, step=1, value=0, key=f"mh_{key_prefix}")
                 pct_mort_h = (mort_h / pob_h) * 100
                 st.caption(f"**{pct_mort_h:.2f}%** del total hembras")
                 if pct_mort_h > 1.0:
                     st.warning("⚠️ % Mortalidad alto. Revisa el valor ingresado.")
                     
             with c2:
-                mort_m = st.number_input("Mortalidad Machos", min_value=0, step=1)
+                mort_m = st.number_input("Mortalidad Machos", min_value=0, step=1, value=0, key=f"mm_{key_prefix}")
                 pct_mort_m = (mort_m / pob_m) * 100
                 st.caption(f"**{pct_mort_m:.2f}%** del total machos")
                 if pct_mort_m > 1.0:
                     st.warning("⚠️ % Mortalidad alto. Revisa el valor ingresado.")
                     
             with c3:
-                desc_h = st.number_input("Descarte Hembras", min_value=0, step=1)
+                desc_h = st.number_input("Descarte Hembras", min_value=0, step=1, value=0, key=f"dh_{key_prefix}")
                 pct_desc_h = (desc_h / pob_h) * 100
                 st.caption(f"**{pct_desc_h:.2f}%** del total hembras")
                 if pct_desc_h > 1.0:
                     st.warning("⚠️ % Descarte alto. Revisa el valor ingresado.")
                     
             with c4:
-                desc_m = st.number_input("Descarte Machos", min_value=0, step=1)
+                desc_m = st.number_input("Descarte Machos", min_value=0, step=1, value=0, key=f"dm_{key_prefix}")
                 pct_desc_m = (desc_m / pob_m) * 100
                 st.caption(f"**{pct_desc_m:.2f}%** del total machos")
                 if pct_desc_m > 1.0:
@@ -166,20 +169,20 @@ elif opcion == "4. Ingreso Diario":
             st.subheader("Consumos")
             c5, c6 = st.columns(2)
             with c5:
-                alimento = st.number_input("Consumo Alimento (kg)", min_value=0.0, step=10.0)
+                alimento = st.number_input("Consumo Alimento (kg)", min_value=0.0, step=10.0, value=0.0, key=f"ali_{key_prefix}")
             with c6:
-                agua = st.number_input("Consumo Agua (Litros)", min_value=0.0, step=50.0)
+                agua = st.number_input("Consumo Agua (Litros)", min_value=0.0, step=50.0, value=0.0, key=f"agu_{key_prefix}")
                 
             st.subheader("Pesajes (Gramos)")
             c7, c8, c9 = st.columns(3)
             with c7:
-                peso_h = st.number_input("Peso Promedio Hembras (g)", min_value=0.0, step=1.0)
+                peso_h = st.number_input("Peso Promedio Hembras (g)", min_value=0.0, step=1.0, value=0.0, key=f"ph_{key_prefix}")
             with c8:
-                peso_m = st.number_input("Peso Promedio Machos (g)", min_value=0.0, step=1.0)
+                peso_m = st.number_input("Peso Promedio Machos (g)", min_value=0.0, step=1.0, value=0.0, key=f"pm_{key_prefix}")
             with c9:
-                peso_mix = st.number_input("Peso Promedio Mixto (g)", min_value=0.0, step=1.0)
+                peso_mix = st.number_input("Peso Promedio Mixto (g)", min_value=0.0, step=1.0, value=0.0, key=f"pmix_{key_prefix}")
                 
-            if st.button("Guardar Registro Diario"):
+            if st.button("Guardar Registro Diario", key=f"btn_{key_prefix}"):
                 reg = {
                     "lote_id": lote_info["id"],
                     "fecha": str(fecha_registro),
