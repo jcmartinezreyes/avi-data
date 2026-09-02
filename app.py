@@ -4,10 +4,8 @@ from supabase import create_client
 from streamlit_folium import st_folium
 import folium
 
-# Configuración de página
 st.set_page_config(page_title="Sistema Avícola", layout="wide")
 
-# Conexión a Supabase
 URL = "https://zmpqrcqadrxevqyshvak.supabase.co"
 KEY = "sb_publishable_--thXNjoDX0MmxrcOBFCLg_Lo5hHeCG"
 supabase = create_client(URL, KEY)
@@ -32,6 +30,7 @@ with st.sidebar.expander("📝 Registros / Operación", expanded=True):
     if st.button("2. Galpones", use_container_width=True):
         st.session_state["opcion_nav"] = "2. Galpones"
         st.session_state["ver_formulario_galpon"] = False
+        st.session_state["galpon_a_editar"] = None
     if st.button("3. Lotes", use_container_width=True):
         st.session_state["opcion_nav"] = "3. Lotes"
         st.session_state["ver_formulario_lote"] = False
@@ -45,7 +44,7 @@ if st.sidebar.button("📈 Análisis Gerencial", use_container_width=True):
 opcion = st.session_state["opcion_nav"]
 
 # ---------------------------------------------------------
-# HELPER: CALCULAR SALDO DE AVES POR LOTE
+# HELPER: SALDOS DE AVES Y BOXES POR LOTE
 # ---------------------------------------------------------
 def obtener_saldos_lotes():
     res_lotes = supabase.table("lotes").select("*, galpones(id, nombre, capacidad, granjas(id, nombre))").eq("activo", True).execute()
@@ -87,7 +86,6 @@ def obtener_saldos_lotes():
 # ---------------------------------------------------------
 if opcion == "📊 Overview General":
     st.header("📊 Vista General del Sistema")
-    
     res_granjas = supabase.table("granjas").select("*").execute()
     saldos_dict = obtener_saldos_lotes()
     
@@ -104,7 +102,6 @@ if opcion == "📊 Overview General":
         st.metric("Saldo Total Aves Vivas", f"{total_saldo_aves:,}")
         
     st.markdown("---")
-    
     st.subheader("Ubicación Geográfica de Granjas")
     if res_granjas.data:
         m_general = folium.Map(location=[4.4065, -75.2265], zoom_start=6)
@@ -140,7 +137,6 @@ elif opcion == "1. Granjas":
                 st.session_state["ver_formulario_granja"] = False
                 st.rerun()
 
-    # VISTA 1: TABLA GENERAL DE GRANJAS
     if not st.session_state["ver_formulario_granja"]:
         res_granjas = supabase.table("granjas").select("*").execute()
         res_galpones = supabase.table("galpones").select("*").execute()
@@ -148,12 +144,9 @@ elif opcion == "1. Granjas":
         
         if res_granjas.data:
             df_galpones = pd.DataFrame(res_galpones.data) if res_galpones.data else pd.DataFrame()
-            
             filas_granjas = []
             for g in res_granjas.data:
                 g_id = g["id"]
-                
-                # Filtrar galpones de esta granja
                 if not df_galpones.empty and "granja_id" in df_galpones.columns:
                     galpones_g = df_galpones[df_galpones["granja_id"] == g_id]
                     cant_galpones = len(galpones_g)
@@ -162,14 +155,10 @@ elif opcion == "1. Granjas":
                     cant_galpones = 0
                     cap_total = 0
                     
-                # Aves alojadas actualmente en esta granja
-                aves_alojadas = 0
-                for item in saldos_dict.values():
-                    lote_info = item["lote"]
-                    if lote_info.get("galpones") and lote_info["galpones"].get("granjas"):
-                        if lote_info["galpones"]["granjas"]["id"] == g_id:
-                            aves_alojadas += item["saldo_total"]
-                            
+                aves_alojadas = sum(
+                    item["saldo_total"] for item in saldos_dict.values()
+                    if item["lote"].get("galpones") and item["lote"]["galpones"].get("granjas") and item["lote"]["galpones"]["granjas"]["id"] == g_id
+                )
                 porcentaje_ocupacion = (aves_alojadas / cap_total * 100) if cap_total > 0 else 0.0
                 
                 filas_granjas.append({
@@ -195,12 +184,9 @@ elif opcion == "1. Granjas":
                     ).add_to(m_granjas)
             st_folium(m_granjas, height=350, width=800)
         else:
-            st.info("No hay granjas registradas. Haz clic en '➕ Registrar Granja' para agregar la primera.")
-
-    # VISTA 2: FORMULARIO REGISTRAR GRANJA
+            st.info("No hay granjas registradas.")
     else:
         st.subheader("Registrar Nueva Granja")
-        st.write("Selecciona la ubicación en el mapa:")
         m = folium.Map(location=[4.4065, -75.2265], zoom_start=6)
         m.add_child(folium.LatLngPopup())
         map_data = st_folium(m, height=350, width=700)
@@ -214,64 +200,61 @@ elif opcion == "1. Granjas":
         with st.form("form_granja", clear_on_submit=True):
             nombre = st.text_input("Nombre de la Granja", value="")
             submitted = st.form_submit_button("Guardar Granja")
-            
             if submitted:
                 if nombre and lat is not None:
                     supabase.table("granjas").insert({"nombre": nombre, "latitud": lat, "longitud": lng}).execute()
                     st.success("¡Granja guardada con éxito!")
                     st.session_state["ver_formulario_granja"] = False
                     st.rerun()
-                elif not nombre:
-                    st.error("Por favor, ingresa el nombre de la granja.")
-                else:
-                    st.error("Por favor, selecciona un punto en el mapa para capturar las coordenadas.")
 
 # ---------------------------------------------------------
-# 2. GESTIÓN DE GALPONES
+# 2. GESTIÓN DE GALPONES (SELECCIÓN Y EDICIÓN)
 # ---------------------------------------------------------
 elif opcion == "2. Galpones":
     if "ver_formulario_galpon" not in st.session_state:
         st.session_state["ver_formulario_galpon"] = False
+    if "galpon_a_editar" not in st.session_state:
+        st.session_state["galpon_a_editar"] = None
 
     col_tit, col_btn = st.columns([4, 1])
     with col_tit:
         st.header("2. Gestión de Galpones")
     with col_btn:
-        if not st.session_state["ver_formulario_galpon"]:
+        if not st.session_state["ver_formulario_galpon"] and st.session_state["galpon_a_editar"] is None:
             if st.button("➕ Crear Galpón", type="primary", use_container_width=True):
                 st.session_state["ver_formulario_galpon"] = True
+                st.session_state["galpon_a_editar"] = None
                 st.rerun()
         else:
             if st.button("⬅️ Volver a Galpones", use_container_width=True):
                 st.session_state["ver_formulario_galpon"] = False
+                st.session_state["galpon_a_editar"] = None
                 st.rerun()
 
-    # VISTA 1: DETALLE DE GALPONES POR GRANJA
-    if not st.session_state["ver_formulario_galpon"]:
+    # VISTA 1: TABLA Y SELECCIÓN DE GALPONES
+    if not st.session_state["ver_formulario_galpon"] and st.session_state["galpon_a_editar"] is None:
         res_granjas = supabase.table("granjas").select("id, nombre").execute()
         
         if res_granjas.data:
             dict_granjas = {g["nombre"]: g["id"] for g in res_granjas.data}
             opciones_granjas = ["Todas las Granjas"] + list(dict_granjas.keys())
-            
             granja_filtro = st.selectbox("Filtrar por Granja:", opciones_granjas)
             
-            # Consultar galpones
             if granja_filtro == "Todas las Granjas":
-                res_galp = supabase.table("galpones").select("*, granjas(nombre)").execute()
+                res_galp = supabase.table("galpones").select("*, granjas(id, nombre)").execute()
             else:
                 g_id = dict_granjas[granja_filtro]
-                res_galp = supabase.table("galpones").select("*, granjas(nombre)").eq("granja_id", g_id).execute()
+                res_galp = supabase.table("galpones").select("*, granjas(id, nombre)").eq("granja_id", g_id).execute()
                 
             saldos_dict = obtener_saldos_lotes()
             
             if res_galp.data:
+                galpones_lista = res_galp.data
                 filas_galp = []
-                for galp in res_galp.data:
+                for galp in galpones_lista:
                     galp_id = galp["id"]
                     capacidad = galp.get("capacidad", 0) or 0
                     
-                    # Buscar si hay un lote activo en este galpón
                     lote_codigo = "Vacío / Sin Lote"
                     saldo_aves = 0
                     proposito_lote = "N/A"
@@ -289,6 +272,7 @@ elif opcion == "2. Galpones":
                     ocupacion = (saldo_aves / capacidad * 100) if capacidad > 0 else 0.0
                     
                     filas_galp.append({
+                        "ID Internal": galp["id"],
                         "Granja": galp["granjas"]["nombre"] if galp.get("granjas") else "N/A",
                         "Galpón": galp["nombre"],
                         "Capacidad Máxima": f"{capacidad:,}",
@@ -298,41 +282,75 @@ elif opcion == "2. Galpones":
                         "Aves Vivas Actuales": f"{saldo_aves:,}",
                         "% Ocupación": f"{ocupacion:.1f}%"
                     })
-                    
-                st.dataframe(pd.DataFrame(filas_galp), use_container_width=True)
+                
+                df_galpones_view = pd.DataFrame(filas_galp)
+                st.write("💡 Selecciona una fila para **editar las propiedades del galpón**:")
+                
+                event = st.dataframe(
+                    df_galpones_view.drop(columns=["ID Internal"]),
+                    use_container_width=True,
+                    on_select="rerun",
+                    selection_mode="single-row"
+                )
+                
+                selected_rows = event.selection.get("rows", [])
+                if selected_rows:
+                    idx = selected_rows[0]
+                    galp_id_sel = df_galpones_view.iloc[idx]["ID Internal"]
+                    galp_obj = next((item for item in galpones_lista if item["id"] == galp_id_sel), None)
+                    if galp_obj:
+                        st.session_state["galpon_a_editar"] = galp_obj
+                        st.rerun()
             else:
-                st.info("No hay galpones registrados para esta granja.")
+                st.info("No hay galpones registrados.")
         else:
-            st.info("No hay granjas creadas aún. Por favor, crea una granja primero.")
+            st.info("Crea una granja primero.")
 
-    # VISTA 2: FORMULARIO CREAR GALPÓN
+    # VISTA 2: FORMULARIO CREAR / EDITAR GALPÓN
     else:
-        st.subheader("Crear Galpón en Granja")
+        galp_edit = st.session_state["galpon_a_editar"]
+        es_edicion = galp_edit is not None
+        
+        st.subheader("✏️ Editar Galpón" if es_edicion else "Crear Galpón en Granja")
         res_granjas = supabase.table("granjas").select("id, nombre").execute()
         
         if res_granjas.data:
             dict_granjas = {g["nombre"]: g["id"] for g in res_granjas.data}
-            granja_sel = st.selectbox("Seleccionar Granja", list(dict_granjas.keys()))
+            lista_granjas = list(dict_granjas.keys())
             
-            with st.form("form_galpon", clear_on_submit=True):
-                nombre_galpon = st.text_input("Nombre / Número del Galpón (Ej: Galpón 01)", value="")
-                capacidad = st.number_input("Capacidad Máxima (Aves)", min_value=0, value=0, step=1000)
-                submitted = st.form_submit_button("Crear Galpón")
+            idx_g = 0
+            if es_edicion and galp_edit.get("granjas"):
+                nombre_g = galp_edit["granjas"]["nombre"]
+                if nombre_g in lista_granjas:
+                    idx_g = lista_granjas.index(nombre_g)
+                    
+            granja_sel = st.selectbox("Seleccionar Granja", lista_granjas, index=idx_g)
+            
+            val_nombre = galp_edit["nombre"] if es_edicion else ""
+            val_cap = int(galp_edit.get("capacidad", 0)) if es_edicion else 0
+            
+            with st.form("form_galpon", clear_on_submit=False):
+                nombre_galpon = st.text_input("Nombre / Número del Galpón", value=val_nombre)
+                capacidad = st.number_input("Capacidad Máxima (Aves)", min_value=0, value=val_cap, step=1000)
+                submitted = st.form_submit_button("Actualizar Galpón" if es_edicion else "Crear Galpón")
                 
                 if submitted:
                     if nombre_galpon and capacidad > 0:
                         datos = {"granja_id": dict_granjas[granja_sel], "nombre": nombre_galpon, "capacidad": capacidad}
-                        supabase.table("galpones").insert(datos).execute()
-                        st.success(f"¡Galpón '{nombre_galpon}' asignado correctamente!")
+                        if es_edicion:
+                            supabase.table("galpones").update(datos).eq("id", galp_edit["id"]).execute()
+                            st.success("¡Galpón actualizado!")
+                        else:
+                            supabase.table("galpones").insert(datos).execute()
+                            st.success("¡Galpón creado!")
                         st.session_state["ver_formulario_galpon"] = False
+                        st.session_state["galpon_a_editar"] = None
                         st.rerun()
                     else:
-                        st.error("Por favor ingresa un nombre válido y una capacidad mayor a 0.")
-        else:
-            st.warning("Debes registrar al menos una granja primero.")
+                        st.error("Ingresa un nombre y capacidad válida.")
 
 # ---------------------------------------------------------
-# 3. MÓDULO DE LOTES
+# 3. MÓDULO DE LOTES Y CONFIGURACIÓN DE BOXES
 # ---------------------------------------------------------
 elif opcion == "3. Lotes":
     if "ver_formulario_lote" not in st.session_state:
@@ -355,7 +373,6 @@ elif opcion == "3. Lotes":
                 st.session_state["lote_a_editar"] = None
                 st.rerun()
 
-    # VISTA 1: TABLA GENERAL Y SELECCIÓN PARA EDICIÓN
     if not st.session_state["ver_formulario_lote"] and st.session_state["lote_a_editar"] is None:
         res_lotes = supabase.table("lotes").select("*, galpones(id, nombre, granjas(id, nombre))").eq("activo", True).execute()
         saldos_dict = obtener_saldos_lotes()
@@ -371,9 +388,14 @@ elif opcion == "3. Lotes":
                 nombre_galpon = l["galpones"]["nombre"] if isinstance(l.get("galpones"), dict) else ""
                 nombre_granja = l["galpones"]["granjas"]["nombre"] if isinstance(l.get("galpones"), dict) and "granjas" in l["galpones"] else ""
                 
+                # Consultar boxes creados
+                res_boxes = supabase.table("galpon_boxes").select("id").eq("lote_id", lote_id).execute()
+                cant_boxes = len(res_boxes.data) if res_boxes.data else 0
+                
                 filas_lotes.append({
                     "ID Internal": l["id"],
                     "Código Lote": l["codigo_lote"],
+                    "Boxes Creados": cant_boxes,
                     "Propósito": l.get("proposito") or "Sin Asignar",
                     "Línea Genética": l["linea_genetica"],
                     "Fecha Encaste": l["fecha_encaste"],
@@ -385,7 +407,7 @@ elif opcion == "3. Lotes":
                 })
                 
             df_lotes = pd.DataFrame(filas_lotes)
-            st.write("💡 Selecciona una fila en la tabla para **editar los datos del lote**:")
+            st.write("💡 Selecciona una fila para **editar los datos o reconfigurar los boxes del lote**:")
             
             event = st.dataframe(
                 df_lotes.drop(columns=["ID Internal"]),
@@ -403,14 +425,13 @@ elif opcion == "3. Lotes":
                     st.session_state["lote_a_editar"] = lote_obj
                     st.rerun()
         else:
-            st.info("No hay lotes creados actualmente. Haz clic en '➕ Crear Nuevo Lote' para ingresar uno.")
+            st.info("No hay lotes creados actualmente.")
 
-    # VISTA 2: FORMULARIO CREACIÓN/EDICIÓN
     else:
         lote_edit = st.session_state["lote_a_editar"]
         es_edicion = lote_edit is not None
         
-        st.subheader("✏️ Editar Lote" if es_edicion else "🐔 Alojar Lote en Galpón")
+        st.subheader("✏️ Editar Lote / Boxes" if es_edicion else "🐔 Alojar Lote en Galpón")
         res_galpones = supabase.table("galpones").select("id, nombre, granjas(nombre)").execute()
         
         if res_galpones.data:
@@ -440,11 +461,9 @@ elif opcion == "3. Lotes":
                     lineas_opt = ["Cobb 500", "Ross 308", "Hubbard", "Otra"]
                 elif proposito == "Postura (Comercial)":
                     modalidad_sexo = "Solo Hembras"
-                    st.info("💡 En Postura Comercial el lote se considera **100% Hembras**.")
                     lineas_opt = ["Hy-Line Brown", "Lohmann Brown", "ISA Brown", "Dekalb", "Otra"]
                 else:
                     modalidad_sexo = "Sexado (Hembras / Machos)"
-                    st.info("💡 En Reproductoras la crianza requiere control sexado de **Hembras y Machos**.")
                     lineas_opt = ["Cobb 500 Breeders", "Ross 308 AP", "Hubbard Efficiency", "Otra"]
             
             idx_linea = 0
@@ -455,68 +474,102 @@ elif opcion == "3. Lotes":
             
             val_codigo = lote_edit["codigo_lote"] if es_edicion else ""
             val_fecha = pd.to_datetime(lote_edit["fecha_encaste"]).date() if es_edicion else pd.to_datetime("today").date()
-            val_h = int(lote_edit.get("aves_hembra", 0) or 0) if es_edicion else 0
-            val_m = int(lote_edit.get("aves_macho", 0) or 0) if es_edicion else 0
             
-            with st.form("form_alojar_lote", clear_on_submit=False):
-                codigo_lote = st.text_input("Código del Lote (Ej: LOTE-2026-01)", value=val_codigo)
-                fecha_encaste = st.date_input("Fecha de Encaste", value=val_fecha)
+            codigo_lote = st.text_input("Código del Lote (Ej: LOTE-2026-01)", value=val_codigo)
+            fecha_encaste = st.date_input("Fecha de Encaste", value=val_fecha)
+            
+            st.markdown("---")
+            st.subheader("📦 Configuración y Distribución por Boxes (Corrales)")
+            
+            # Cargar boxes guardados si es edición
+            boxes_existentes = []
+            if es_edicion:
+                res_b = supabase.table("galpon_boxes").select("*").eq("lote_id", lote_edit["id"]).execute()
+                boxes_existentes = res_b.data if res_b.data else []
                 
-                st.subheader("Población a Alojar")
-                hembras, machos = 0, 0
-                
-                if modalidad_sexo == "Sexado (Hembras / Machos)":
-                    col_h, col_m = st.columns(2)
-                    with col_h:
-                        hembras = st.number_input("Aves Hembras Iniciales", min_value=0, value=val_h, step=500)
-                    with col_m:
-                        machos = st.number_input("Aves Machos Iniciales", min_value=0, value=val_m, step=100)
-                elif modalidad_sexo == "Mixto (As Sexed)":
-                    total_mixto = st.number_input("Cantidad de Aves Mixtas (Sin sexar)", min_value=0, value=val_h + val_m, step=500)
-                    hembras = total_mixto // 2
-                    machos = total_mixto - hembras
-                elif modalidad_sexo == "Solo Hembras":
-                    hembras = st.number_input("Cantidad de Aves Hembras", min_value=0, value=val_h, step=500)
-                    machos = 0
+            num_boxes = st.number_input(
+                "Número de Boxes en el Galpón:", 
+                min_value=1, 
+                max_value=30, 
+                value=len(boxes_existentes) if len(boxes_existentes) > 0 else 5, 
+                step=1
+            )
+            
+            datos_boxes_inputs = []
+            cols_box = st.columns(min(num_boxes, 4))
+            
+            for i in range(int(num_boxes)):
+                col_idx = i % 4
+                with cols_box[col_idx]:
+                    st.markdown(f"**Box #{i+1}**")
+                    def_h_b = int(boxes_existentes[i]["aves_hembra_inicial"]) if i < len(boxes_existentes) else 0
+                    def_m_b = int(boxes_existentes[i]["aves_macho_inicial"]) if i < len(boxes_existentes) else 0
                     
-                submitted = st.form_submit_button("Actualizar Lote" if es_edicion else "Alojar Lote")
-                
-                if submitted:
-                    totales = hembras + machos
-                    if codigo_lote and totales > 0:
-                        datos_lote = {
-                            "galpon_id": dict_galpones[galpon_sel],
-                            "codigo_lote": codigo_lote,
-                            "proposito": proposito,
-                            "linea_genetica": linea,
-                            "fecha_encaste": str(fecha_encaste),
-                            "aves_hembra": hembras,
-                            "aves_macho": machos,
-                            "aves_totales": totales,
-                            "activo": True
-                        }
-                        
-                        if es_edicion:
-                            supabase.table("lotes").update(datos_lote).eq("id", lote_edit["id"]).execute()
-                            st.success(f"¡Lote '{codigo_lote}' actualizado correctamente!")
-                        else:
-                            supabase.table("lotes").insert(datos_lote).execute()
-                            st.success(f"¡Lote '{codigo_lote}' alojado correctamente!")
-                            
-                        st.session_state["ver_formulario_lote"] = False
-                        st.session_state["lote_a_editar"] = None
-                        st.rerun()
+                    if modalidad_sexo in ["Sexado (Hembras / Machos)", "Mixto (As Sexed)"]:
+                        b_h = st.number_input(f"Hembras Box {i+1}", min_value=0, value=def_h_b, step=100, key=f"bh_{i}")
+                        b_m = st.number_input(f"Machos Box {i+1}", min_value=0, value=def_m_b, step=50, key=f"bm_{i}")
                     else:
-                        st.error("Ingresa un código de lote válido y una cantidad de aves mayor a 0.")
+                        b_h = st.number_input(f"Hembras Box {i+1}", min_value=0, value=def_h_b, step=100, key=f"bh_{i}")
+                        b_m = 0
+                        
+                    datos_boxes_inputs.append({"box_num": i+1, "hembras": b_h, "machos": b_m})
+
+            # Suma de aves de todos los boxes
+            tot_h_calculado = sum(b["hembras"] for b in datos_boxes_inputs)
+            tot_m_calculado = sum(b["machos"] for b in datos_boxes_inputs)
+            tot_general = tot_h_calculado + tot_m_calculado
+            
+            st.info(f"📊 **Población Total Calculada del Lote:** {tot_h_calculado:,} Hembras | {tot_m_calculado:,} Machos | **Total: {tot_general:,} Aves**")
+
+            if st.button("Guardar Configuración del Lote y Boxes", type="primary"):
+                if codigo_lote and tot_general > 0:
+                    datos_lote = {
+                        "galpon_id": dict_galpones[galpon_sel],
+                        "codigo_lote": codigo_lote,
+                        "proposito": proposito,
+                        "linea_genetica": linea,
+                        "fecha_encaste": str(fecha_encaste),
+                        "aves_hembra": tot_h_calculado,
+                        "aves_macho": tot_m_calculado,
+                        "aves_totales": tot_general,
+                        "activo": True
+                    }
+                    
+                    if es_edicion:
+                        lote_id_act = lote_edit["id"]
+                        supabase.table("lotes").update(datos_lote).eq("id", lote_id_act).execute()
+                        supabase.table("galpon_boxes").delete().eq("lote_id", lote_id_act).execute()
+                    else:
+                        res_ins = supabase.table("lotes").insert(datos_lote).execute()
+                        lote_id_act = res_ins.data[0]["id"]
+                        
+                    # Insertar nuevos boxes
+                    filas_boxes = [
+                        {
+                            "lote_id": lote_id_act,
+                            "nombre_box": f"Box {b['box_num']}",
+                            "aves_hembra_inicial": b["hembras"],
+                            "aves_macho_inicial": b["machos"]
+                        }
+                        for b in datos_boxes_inputs
+                    ]
+                    supabase.table("galpon_boxes").insert(filas_boxes).execute()
+                    
+                    st.success("¡Lote y distribución por boxes guardados exitosamente!")
+                    st.session_state["ver_formulario_lote"] = False
+                    st.session_state["lote_a_editar"] = None
+                    st.rerun()
+                else:
+                    st.error("Ingresa un código de lote válido y asegúrate de asignar aves en los boxes.")
         else:
             st.warning("Primero debes crear un galpón.")
 
 # ---------------------------------------------------------
-# 4. INGRESO DIARIO
+# 4. INGRESO DIARIO POR BOX Y CÁLCULO DE LOTE
 # ---------------------------------------------------------
 elif opcion == "4. Ingreso Diario":
-    st.header("4. Registro Diario del Galpón")
-    res_lotes = supabase.table("lotes").select("id, codigo_lote, linea_genetica, fecha_encaste, aves_hembra, aves_macho, galpones(nombre)").eq("activo", True).execute()
+    st.header("4. Registro Diario por Boxes y Consolidado de Lote")
+    res_lotes = supabase.table("lotes").select("id, codigo_lote, linea_genetica, fecha_encaste, galpones(nombre)").eq("activo", True).execute()
     
     if res_lotes.data:
         lotes_dict = {
@@ -533,86 +586,134 @@ elif opcion == "4. Ingreso Diario":
         dia_vida_calculado = dias_diferencia + 1
         
         if dia_vida_calculado < 1:
-            st.error(f"La fecha de registro ({fecha_registro}) no puede ser anterior a la fecha de encaste del lote ({fecha_encaste}).")
+            st.error(f"La fecha de registro no puede ser anterior al encaste ({fecha_encaste}).")
         else:
-            st.info(f"📅 **Día de Vida (Edad) calculado:** Día {dia_vida_calculado} (Encaste: {fecha_encaste})")
+            st.info(f"📅 **Día de Vida (Edad):** Día {dia_vida_calculado}")
             
-            res_existente = supabase.table("registros_diarios") \
-                .select("*") \
-                .eq("lote_id", lote_info["id"]) \
-                .eq("fecha", str(fecha_registro)) \
-                .execute()
+            # Consultar boxes asignados
+            res_boxes = supabase.table("galpon_boxes").select("*").eq("lote_id", lote_info["id"]).order("nombre_box").execute()
+            list_boxes = res_boxes.data if res_boxes.data else []
             
-            registro_previo = res_existente.data[0] if res_existente.data else None
-            
-            if registro_previo:
-                st.warning(f"⚠️ Ya existe un registro para la fecha {fecha_registro}. Se cargaron los datos guardados para su modificación.")
-            
-            def_mh = int(registro_previo.get("mortalidad_hembra", 0)) if registro_previo else 0
-            def_mm = int(registro_previo.get("mortalidad_macho", 0)) if registro_previo else 0
-            def_dh = int(registro_previo.get("descarte_hembra", 0)) if registro_previo else 0
-            def_dm = int(registro_previo.get("descarte_macho", 0)) if registro_previo else 0
-            def_ali = float(registro_previo.get("consumo_alimento_kg", 0.0)) if registro_previo else 0.0
-            def_agu = float(registro_previo.get("consumo_agua_litros", 0.0)) if registro_previo else 0.0
-            def_ph = float(registro_previo.get("peso_promedio_hembra_g", 0.0)) if registro_previo else 0.0
-            def_pm = float(registro_previo.get("peso_promedio_macho_g", 0.0)) if registro_previo else 0.0
-            def_pmix = float(registro_previo.get("peso_promedio_mixto_g", 0.0)) if registro_previo else 0.0
+            if not list_boxes:
+                st.warning("Este lote no tiene boxes configurados. Ve al menú 'Lotes' y edita el lote para agregar boxes.")
+            else:
+                # Comprobar si existe un registro general del día
+                res_existente = supabase.table("registros_diarios").select("*").eq("lote_id", lote_info["id"]).eq("fecha", str(fecha_registro)).execute()
+                registro_previo = res_existente.data[0] if res_existente.data else None
+                
+                # Cargar registros por box previos si existen
+                dict_reg_box_previo = {}
+                if registro_previo:
+                    res_reg_b = supabase.table("registros_diarios_box").select("*").eq("registro_diario_id", registro_previo["id"]).execute()
+                    if res_reg_b.data:
+                        dict_reg_box_previo = {rb["box_id"]: rb for rb in res_reg_b.data}
 
-            with st.form("form_registro_diario", clear_on_submit=True):
-                st.subheader("Mortalidad y Descartes Sexados")
-                c1, c2, c3, c4 = st.columns(4)
+                st.subheader("📌 Captura de Datos Diarios por Box")
                 
-                with c1:
-                    mort_h = st.number_input("Mortalidad Hembras", min_value=0, step=1, value=def_mh)
-                with c2:
-                    mort_m = st.number_input("Mortalidad Machos", min_value=0, step=1, value=def_mm)
-                with c3:
-                    desc_h = st.number_input("Descarte Hembras", min_value=0, step=1, value=def_dh)
-                with c4:
-                    desc_m = st.number_input("Descarte Machos", min_value=0, step=1, value=def_dm)
-                    
-                st.subheader("Consumos")
-                c5, c6 = st.columns(2)
-                with c5:
-                    alimento = st.number_input("Consumo Alimento (kg)", min_value=0.0, step=10.0, value=def_ali)
-                with c6:
-                    agua = st.number_input("Consumo Agua (Litros)", min_value=0.0, step=50.0, value=def_agu)
-                    
-                st.subheader("Pesajes (Gramos)")
-                c7, c8, c9 = st.columns(3)
-                with c7:
-                    peso_h = st.number_input("Peso Promedio Hembras (g)", min_value=0.0, step=1.0, value=def_ph)
-                with c8:
-                    peso_m = st.number_input("Peso Promedio Machos (g)", min_value=0.0, step=1.0, value=def_pm)
-                with c9:
-                    peso_mix = st.number_input("Peso Promedio Mixto (g)", min_value=0.0, step=1.0, value=def_pmix)
-                    
-                btn_label = "Actualizar Registro Diario" if registro_previo else "Guardar Registro Diario"
-                submitted = st.form_submit_button(btn_label)
+                datos_ingresados_boxes = []
                 
-                if submitted:
-                    reg = {
+                for b in list_boxes:
+                    box_id = b["id"]
+                    box_nombre = b["nombre_box"]
+                    prev_b = dict_reg_box_previo.get(box_id, {})
+                    
+                    with st.expander(f"📦 {box_nombre}", expanded=True):
+                        c1, c2, c3, c4, c5, c6 = st.columns(6)
+                        with c1:
+                            mh = st.number_input(f"Mort. Hembra", min_value=0, value=int(prev_b.get("mortalidad_hembra", 0)), key=f"mh_{box_id}")
+                        with c2:
+                            mm = st.number_input(f"Mort. Macho", min_value=0, value=int(prev_b.get("mortalidad_macho", 0)), key=f"mm_{box_id}")
+                        with c3:
+                            dh = st.number_input(f"Desc. Hembra", min_value=0, value=int(prev_b.get("descarte_hembra", 0)), key=f"dh_{box_id}")
+                        with c4:
+                            dm = st.number_input(f"Desc. Macho", min_value=0, value=int(prev_b.get("descarte_macho", 0)), key=f"dm_{box_id}")
+                        with c5:
+                            ali = st.number_input(f"Alimento (kg)", min_value=0.0, value=float(prev_b.get("consumo_alimento_kg", 0.0)), step=5.0, key=f"ali_{box_id}")
+                        with c6:
+                            agu = st.number_input(f"Agua (L)", min_value=0.0, value=float(prev_b.get("consumo_agua_litros", 0.0)), step=10.0, key=f"agu_{box_id}")
+                            
+                        c7, c8 = st.columns(2)
+                        with c7:
+                            ph = st.number_input(f"Peso Prom. Hembra (g)", min_value=0.0, value=float(prev_b.get("peso_promedio_hembra_g", 0.0)), key=f"ph_{box_id}")
+                        with c8:
+                            pm = st.number_input(f"Peso Prom. Macho (g)", min_value=0.0, value=float(prev_b.get("peso_promedio_macho_g", 0.0)), key=f"pm_{box_id}")
+                            
+                        datos_ingresados_boxes.append({
+                            "box_id": box_id,
+                            "mh": mh, "mm": mm, "dh": dh, "dm": dm,
+                            "ali": ali, "agu": agu, "ph": ph, "pm": pm
+                        })
+
+                # CÁLCULOS TOTALIZADOS Y PROMEDIOS PARA EL LOTE
+                tot_mh = sum(item["mh"] for item in datos_ingresados_boxes)
+                tot_mm = sum(item["mm"] for item in datos_ingresados_boxes)
+                tot_dh = sum(item["dh"] for item in datos_ingresados_boxes)
+                tot_dm = sum(item["dm"] for item in datos_ingresados_boxes)
+                tot_ali = sum(item["ali"] for item in datos_ingresados_boxes)
+                tot_agu = sum(item["agu"] for item in datos_ingresados_boxes)
+                
+                # Promedios ponderados sencillos para peso de lote
+                pesos_h = [item["ph"] for item in datos_ingresados_boxes if item["ph"] > 0]
+                pesos_m = [item["pm"] for item in datos_ingresados_boxes if item["pm"] > 0]
+                
+                prom_ph = (sum(pesos_h) / len(pesos_h)) if pesos_h else 0.0
+                prom_pm = (sum(pesos_m) / len(pesos_m)) if pesos_m else 0.0
+                prom_mix = (prom_ph + prom_pm) / 2 if (prom_ph > 0 and prom_pm > 0) else (prom_ph or prom_pm)
+
+                st.markdown("---")
+                st.subheader("📊 Consolidado Automático del Lote (Día Actual)")
+                
+                k1, k2, k3, k4 = st.columns(4)
+                k1.metric("Mortalidad Total", f"{tot_mh + tot_mm} aves")
+                k2.metric("Descarte Total", f"{tot_dh + tot_dm} aves")
+                k3.metric("Alimento Consumido", f"{tot_ali:.1f} kg")
+                k4.metric("Agua Consumida", f"{tot_agu:.1f} L")
+
+                btn_label = "Actualizar Registro Diario" if registro_previo else "Guardar Registro Diario del Lote"
+                if st.button(btn_label, type="primary"):
+                    reg_general = {
                         "lote_id": lote_info["id"],
                         "fecha": str(fecha_registro),
                         "dia_vida": int(dia_vida_calculado),
-                        "mortalidad_hembra": mort_h,
-                        "mortalidad_macho": mort_m,
-                        "descarte_hembra": desc_h,
-                        "descarte_macho": desc_m,
-                        "descartes": desc_h + desc_m,
-                        "consumo_alimento_kg": alimento,
-                        "consumo_agua_litros": agua,
-                        "peso_promedio_hembra_g": peso_h,
-                        "peso_promedio_macho_g": peso_m,
-                        "peso_promedio_mixto_g": peso_mix
+                        "mortalidad_hembra": tot_mh,
+                        "mortalidad_macho": tot_mm,
+                        "descarte_hembra": tot_dh,
+                        "descarte_macho": tot_dm,
+                        "descartes": tot_dh + tot_dm,
+                        "consumo_alimento_kg": tot_ali,
+                        "consumo_agua_litros": tot_agu,
+                        "peso_promedio_hembra_g": prom_ph,
+                        "peso_promedio_macho_g": prom_pm,
+                        "peso_promedio_mixto_g": prom_mix
                     }
                     
                     if registro_previo:
-                        supabase.table("registros_diarios").update(reg).eq("id", registro_previo["id"]).execute()
-                        st.success(f"¡Registro del Día {dia_vida_calculado} actualizado con éxito!")
+                        reg_id = registro_previo["id"]
+                        supabase.table("registros_diarios").update(reg_general).eq("id", reg_id).execute()
+                        supabase.table("registros_diarios_box").delete().eq("registro_diario_id", reg_id).execute()
                     else:
-                        supabase.table("registros_diarios").insert(reg).execute()
-                        st.success(f"¡Registro del Día {dia_vida_calculado} guardado exitosamente!")
+                        res_reg_ins = supabase.table("registros_diarios").insert(reg_general).execute()
+                        reg_id = res_reg_ins.data[0]["id"]
+                        
+                    filas_reg_box = [
+                        {
+                            "registro_diario_id": reg_id,
+                            "box_id": b["box_id"],
+                            "mortalidad_hembra": b["mh"],
+                            "mortalidad_macho": b["mm"],
+                            "descarte_hembra": b["dh"],
+                            "descarte_macho": b["dm"],
+                            "consumo_alimento_kg": b["ali"],
+                            "consumo_agua_litros": b["agu"],
+                            "peso_promedio_hembra_g": b["ph"],
+                            "peso_promedio_macho_g": b["pm"]
+                        }
+                        for b in datos_ingresados_boxes
+                    ]
+                    supabase.table("registros_diarios_box").insert(filas_reg_box).execute()
+                    
+                    st.success("¡Registro diario por box y consolidado de lote guardado exitosamente!")
+                    st.rerun()
     else:
         st.info("No hay lotes activos actualmente.")
 
@@ -625,7 +726,7 @@ elif opcion == "📈 Análisis Gerencial":
     
     if res.data:
         df = pd.DataFrame(res.data)
-        st.subheader("Tabla Consolidada de Registros")
+        st.subheader("Tabla Consolidada de Registros General")
         st.dataframe(df, use_container_width=True)
         
         st.subheader("Evolución de Pesos Promedio")
@@ -634,4 +735,4 @@ elif opcion == "📈 Análisis Gerencial":
         st.subheader("Consumo Diario de Alimento (kg)")
         st.bar_chart(df, x="dia_vida", y="consumo_alimento_kg")
     else:
-        st.info("Aún no hay datos de consumo o pesajes cargados.")
+        st.info("Aún no hay datos cargados.")
