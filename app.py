@@ -33,6 +33,7 @@ with st.sidebar.expander("📝 Registros / Operación", expanded=True):
     if st.button("3. Lotes", use_container_width=True):
         st.session_state["opcion_nav"] = "3. Lotes"
         st.session_state["ver_formulario_lote"] = False
+        st.session_state["lote_a_editar"] = None
     if st.button("4. Ingreso Diario", use_container_width=True):
         st.session_state["opcion_nav"] = "4. Ingreso Diario"
 
@@ -86,7 +87,7 @@ if opcion == "📊 Overview General":
             
             filas_lotes.append({
                 "Código Lote": l["codigo_lote"],
-                "Propósito": l.get("proposito", "N/A"),
+                "Propósito": l.get("proposito") or "Sin Asignar",
                 "Línea Genética": l["linea_genetica"],
                 "Fecha Encaste": l["fecha_encaste"],
                 "Saldo Hembras": f"{saldo_h:,}",
@@ -178,11 +179,13 @@ elif opcion == "2. Crear Galpón":
         st.warning("Debes registrar al menos una granja primero.")
 
 # ---------------------------------------------------------
-# 4. MÓDULO DE LOTES (VISTA GENERAL + FORMULARIO DE CREACIÓN)
+# 4. MÓDULO DE LOTES (VISUALIZACIÓN, EDICIÓN Y CREACIÓN)
 # ---------------------------------------------------------
 elif opcion == "3. Lotes":
     if "ver_formulario_lote" not in st.session_state:
         st.session_state["ver_formulario_lote"] = False
+    if "lote_a_editar" not in st.session_state:
+        st.session_state["lote_a_editar"] = None
 
     col_tit, col_btn = st.columns([4, 1])
     
@@ -190,18 +193,20 @@ elif opcion == "3. Lotes":
         st.header("3. Gestión de Lotes")
         
     with col_btn:
-        if not st.session_state["ver_formulario_lote"]:
+        if not st.session_state["ver_formulario_lote"] and st.session_state["lote_a_editar"] is None:
             if st.button("➕ Crear Nuevo Lote", type="primary", use_container_width=True):
                 st.session_state["ver_formulario_lote"] = True
+                st.session_state["lote_a_editar"] = None
                 st.rerun()
         else:
             if st.button("⬅️ Volver a Lotes", use_container_width=True):
                 st.session_state["ver_formulario_lote"] = False
+                st.session_state["lote_a_editar"] = None
                 st.rerun()
 
-    # VISTA 1: TABLA GENERAL DE LOTES
-    if not st.session_state["ver_formulario_lote"]:
-        res_lotes = supabase.table("lotes").select("*, galpones(nombre, granjas(nombre))").eq("activo", True).execute()
+    # VISTA 1: TABLA GENERAL Y SELECCIÓN PARA EDICIÓN
+    if not st.session_state["ver_formulario_lote"] and st.session_state["lote_a_editar"] is None:
+        res_lotes = supabase.table("lotes").select("*, galpones(id, nombre, granjas(id, nombre))").eq("activo", True).execute()
         res_reg = supabase.table("registros_diarios").select("lote_id, mortalidad_hembra, mortalidad_macho, descarte_hembra, descarte_macho").execute()
         
         df_reg = pd.DataFrame(res_reg.data) if res_reg.data else pd.DataFrame()
@@ -215,9 +220,11 @@ elif opcion == "3. Lotes":
                     "bajas_m": row.get("mortalidad_macho", 0) + row.get("descarte_macho", 0)
                 }
 
-        filas_lotes = []
         if res_lotes.data:
-            for l in res_lotes.data:
+            lotes_lista = res_lotes.data
+            filas_lotes = []
+            
+            for l in lotes_lista:
                 lote_id = l["id"]
                 inicial_h = l.get("aves_hembra", 0) or 0
                 inicial_m = l.get("aves_macho", 0) or 0
@@ -231,33 +238,70 @@ elif opcion == "3. Lotes":
                 nombre_granja = l["galpones"]["granjas"]["nombre"] if isinstance(l.get("galpones"), dict) and "granjas" in l["galpones"] else ""
                 
                 filas_lotes.append({
+                    "ID Internal": l["id"],
                     "Código Lote": l["codigo_lote"],
-                    "Propósito": l.get("proposito", "N/A"),
+                    "Propósito": l.get("proposito") or "Sin Asignar",
                     "Línea Genética": l["linea_genetica"],
                     "Fecha Encaste": l["fecha_encaste"],
-                    "Inicial Hembras": f"{inicial_h:,}",
-                    "Inicial Machos": f"{inicial_m:,}",
-                    "Saldo Actual Aves": f"{saldo_total:,}",
+                    "Inicial Hembras": inicial_h,
+                    "Inicial Machos": inicial_m,
+                    "Saldo Actual Aves": saldo_total,
                     "Galpón": nombre_galpon,
                     "Granja": nombre_granja
                 })
                 
-            st.dataframe(pd.DataFrame(filas_lotes), use_container_width=True)
+            df_lotes = pd.DataFrame(filas_lotes)
+            
+            st.write("💡 Selecciona una fila en la tabla para **editar los datos del lote**:")
+            
+            event = st.dataframe(
+                df_lotes.drop(columns=["ID Internal"]),
+                use_container_width=True,
+                on_select="rerun",
+                selection_mode="single-row"
+            )
+            
+            selected_rows = event.selection.get("rows", [])
+            if selected_rows:
+                idx = selected_rows[0]
+                lote_id_sel = df_lotes.iloc[idx]["ID Internal"]
+                lote_obj = next((item for item in lotes_lista if item["id"] == lote_id_sel), None)
+                if lote_obj:
+                    st.session_state["lote_a_editar"] = lote_obj
+                    st.rerun()
         else:
             st.info("No hay lotes creados actualmente. Haz clic en '➕ Crear Nuevo Lote' para ingresar uno.")
 
-    # VISTA 2: FORMULARIO CREAR / ALOJAR LOTE
+    # VISTA 2: FORMULARIO DE CREACIÓN O EDICIÓN
     else:
-        st.subheader("Alojar Lote en Galpón")
+        lote_edit = st.session_state["lote_a_editar"]
+        es_edicion = lote_edit is not None
+        
+        st.subheader("✏️ Editar Lote" if es_edicion else "🐔 Alojar Lote en Galpón")
+        
         res_galpones = supabase.table("galpones").select("id, nombre, granjas(nombre)").execute()
         
         if res_galpones.data:
             dict_galpones = {f"{g['granjas']['nombre']} - {g['nombre']}": g["id"] for g in res_galpones.data}
-            galpon_sel = st.selectbox("Seleccionar Galpón", list(dict_galpones.keys()))
+            lista_galpones = list(dict_galpones.keys())
+            
+            idx_galpon = 0
+            if es_edicion and lote_edit.get("galpones"):
+                g_nombre = f"{lote_edit['galpones']['granjas']['nombre']} - {lote_edit['galpones']['nombre']}"
+                if g_nombre in lista_galpones:
+                    idx_galpon = lista_galpones.index(g_nombre)
+            
+            galpon_sel = st.selectbox("Seleccionar Galpón", lista_galpones, index=idx_galpon)
             
             col_p1, col_p2 = st.columns(2)
+            
+            opciones_proposito = ["Engorde", "Postura (Comercial)", "Reproductoras"]
+            idx_prop = 0
+            if es_edicion and lote_edit.get("proposito") in opciones_proposito:
+                idx_prop = opciones_proposito.index(lote_edit.get("proposito"))
+                
             with col_p1:
-                proposito = st.selectbox("Propósito del Lote", ["Engorde", "Postura (Comercial)", "Reproductoras"])
+                proposito = st.selectbox("Propósito del Lote", opciones_proposito, index=idx_prop)
             
             with col_p2:
                 if proposito == "Engorde":
@@ -271,12 +315,21 @@ elif opcion == "3. Lotes":
                     modalidad_sexo = "Sexado (Hembras / Machos)"
                     st.info("💡 En Reproductoras la crianza requiere control sexado de **Hembras y Machos**.")
                     lineas_opt = ["Cobb 500 Breeders", "Ross 308 AP", "Hubbard Efficiency", "Otra"]
-                    
-            linea = st.selectbox("Línea Genética / Estirpe", lineas_opt)
             
-            with st.form("form_alojar_lote", clear_on_submit=True):
-                codigo_lote = st.text_input("Código del Lote (Ej: LOTE-2026-01)", value="")
-                fecha_encaste = st.date_input("Fecha de Encaste")
+            idx_linea = 0
+            if es_edicion and lote_edit.get("linea_genetica") in lineas_opt:
+                idx_linea = lineas_opt.index(lote_edit.get("linea_genetica"))
+                
+            linea = st.selectbox("Línea Genética / Estirpe", lineas_opt, index=idx_linea)
+            
+            val_codigo = lote_edit["codigo_lote"] if es_edicion else ""
+            val_fecha = pd.to_datetime(lote_edit["fecha_encaste"]).date() if es_edicion else pd.to_datetime("today").date()
+            val_h = int(lote_edit.get("aves_hembra", 0) or 0) if es_edicion else 0
+            val_m = int(lote_edit.get("aves_macho", 0) or 0) if es_edicion else 0
+            
+            with st.form("form_alojar_lote", clear_on_submit=False):
+                codigo_lote = st.text_input("Código del Lote (Ej: LOTE-2026-01)", value=val_codigo)
+                fecha_encaste = st.date_input("Fecha de Encaste", value=val_fecha)
                 
                 st.subheader("Población a Alojar")
                 hembras, machos = 0, 0
@@ -284,18 +337,19 @@ elif opcion == "3. Lotes":
                 if modalidad_sexo == "Sexado (Hembras / Machos)":
                     col_h, col_m = st.columns(2)
                     with col_h:
-                        hembras = st.number_input("Aves Hembras Iniciales", min_value=0, value=0, step=500)
+                        hembras = st.number_input("Aves Hembras Iniciales", min_value=0, value=val_h, step=500)
                     with col_m:
-                        machos = st.number_input("Aves Machos Iniciales", min_value=0, value=0, step=100)
+                        machos = st.number_input("Aves Machos Iniciales", min_value=0, value=val_m, step=100)
                 elif modalidad_sexo == "Mixto (As Sexed)":
-                    total_mixto = st.number_input("Cantidad de Aves Mixtas (Sin sexar)", min_value=0, value=0, step=500)
+                    total_mixto = st.number_input("Cantidad de Aves Mixtas (Sin sexar)", min_value=0, value=val_h + val_m, step=500)
                     hembras = total_mixto // 2
                     machos = total_mixto - hembras
                 elif modalidad_sexo == "Solo Hembras":
-                    hembras = st.number_input("Cantidad de Aves Hembras", min_value=0, value=0, step=500)
+                    hembras = st.number_input("Cantidad de Aves Hembras", min_value=0, value=val_h, step=500)
                     machos = 0
                     
-                submitted = st.form_submit_button("Alojar Lote")
+                btn_texto = "Actualizar Lote" if es_edicion else "Alojar Lote"
+                submitted = st.form_submit_button(btn_texto)
                 
                 if submitted:
                     totales = hembras + machos
@@ -311,14 +365,17 @@ elif opcion == "3. Lotes":
                             "aves_totales": totales,
                             "activo": True
                         }
-                        try:
+                        
+                        if es_edicion:
+                            supabase.table("lotes").update(datos_lote).eq("id", lote_edit["id"]).execute()
+                            st.success(f"¡Lote '{codigo_lote}' actualizado correctamente!")
+                        else:
                             supabase.table("lotes").insert(datos_lote).execute()
-                        except Exception:
-                            datos_lote.pop("proposito", None)
-                            supabase.table("lotes").insert(datos_lote).execute()
+                            st.success(f"¡Lote '{codigo_lote}' alojado correctamente!")
                             
-                        st.success(f"¡Lote '{codigo_lote}' alojado correctamente!")
                         st.session_state["ver_formulario_lote"] = False
+                        st.session_state["lote_a_editar"] = None
+                        st.rerun()
                     else:
                         st.error("Ingresa un código de lote válido y una cantidad de aves mayor a 0.")
         else:
@@ -348,7 +405,7 @@ elif opcion == "4. Ingreso Diario":
         if dia_vida_calculado < 1:
             st.error(f"La fecha de registro ({fecha_registro}) no puede ser anterior a la fecha de encaste del lote ({fecha_encaste}).")
         else:
-            st.info(f"📅 **Día de Vida (Edad) calculado:** Día {dia_vida_calculado} (Encaste: {fecha_encaste})")
+            st.info(f"📅 **Día de Vida (Edad) calculated:** Día {dia_vida_calculado} (Encaste: {fecha_encaste})")
             
             res_existente = supabase.table("registros_diarios") \
                 .select("*") \
