@@ -1,3 +1,4 @@
+import os
 import streamlit as st
 import pandas as pd
 from supabase import create_client
@@ -6,9 +7,66 @@ import folium
 
 st.set_page_config(page_title="Sistema Avícola", layout="wide")
 
-URL = "https://zmpqrcqadrxevqyshvak.supabase.co"
-KEY = "sb_publishable_--thXNjoDX0MmxrcOBFCLg_Lo5hHeCG"
+URL = os.getenv("SUPABASE_URL", "https://zmpqrcqadrxevqyshvak.supabase.co")
+KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "sb_publishable_--thXNjoDX0MmxrcOBFCLg_Lo5hHeCG")
 supabase = create_client(URL, KEY)
+
+# La base aplica RLS por usuario autenticado y organización.
+if "avi_auth_tokens" not in st.session_state:
+    st.title("Sistema de Control Avícola 🐔")
+    with st.form("avi_login"):
+        email = st.text_input("Correo electrónico")
+        password = st.text_input("Contraseña", type="password")
+        login = st.form_submit_button("Iniciar sesión", type="primary")
+    if login:
+        try:
+            auth = supabase.auth.sign_in_with_password({"email": email, "password": password})
+            st.session_state["avi_auth_tokens"] = {
+                "access_token": auth.session.access_token,
+                "refresh_token": auth.session.refresh_token,
+            }
+            st.rerun()
+        except Exception:
+            st.error("No se pudo iniciar sesión. Verifica tus credenciales o solicita acceso al administrador.")
+    st.stop()
+
+try:
+    supabase.auth.set_session(
+        st.session_state["avi_auth_tokens"]["access_token"],
+        st.session_state["avi_auth_tokens"]["refresh_token"],
+    )
+    active_session = supabase.auth.get_session()
+    if active_session and active_session.access_token:
+        st.session_state["avi_auth_tokens"] = {
+            "access_token": active_session.access_token,
+            "refresh_token": active_session.refresh_token,
+        }
+except Exception:
+    st.session_state.pop("avi_auth_tokens", None)
+    st.warning("La sesión expiró. Inicia sesión de nuevo.")
+    st.rerun()
+
+membership_result = supabase.table("organization_memberships").select(
+    "organization_id, role, organizations(name)"
+).execute()
+memberships = membership_result.data or []
+if not memberships:
+    st.title("Sistema de Control Avícola 🐔")
+    st.info("Tu usuario aún no pertenece a una organización.")
+    with st.form("avi_create_organization"):
+        organization_name = st.text_input("Nombre de tu organización")
+        create_org = st.form_submit_button("Crear organización", type="primary")
+    if create_org:
+        try:
+            supabase.rpc("create_organization", {"p_name": organization_name}).execute()
+            st.rerun()
+        except Exception:
+            st.error("No se pudo crear la organización. Si ya perteneces a otra, solicita al administrador que te agregue.")
+    if st.button("Cerrar sesión"):
+        supabase.auth.sign_out()
+        st.session_state.pop("avi_auth_tokens", None)
+        st.rerun()
+    st.stop()
 
 st.title("Sistema de Control Avícola 🐔")
 
@@ -16,6 +74,25 @@ st.title("Sistema de Control Avícola 🐔")
 # NAVEGACIÓN
 # ---------------------------------------------------------
 st.sidebar.title("Menú Principal")
+st.sidebar.caption("Organización: " + ", ".join((m.get("organizations") or {}).get("name", "Sin nombre") for m in memberships))
+plan_result = supabase.table("organization_subscriptions").select("plan_code").eq(
+    "organization_id", memberships[0]["organization_id"]
+).execute()
+if plan_result.data:
+    plan_code = plan_result.data[0]["plan_code"]
+    plan_data = supabase.table("subscription_plans").select(
+        "name, max_galpones, incubadora_incluida, max_incubadoras"
+    ).eq("code", plan_code).execute()
+    if plan_data.data:
+        plan = plan_data.data[0]
+        limit = "sin límite" if plan["max_galpones"] is None else str(plan["max_galpones"])
+        incubator = "incluida" if plan["incubadora_incluida"] else "no incluida"
+        st.sidebar.caption(f"Plan {plan['name']} · {limit} galpones · incubadora {incubator}")
+if st.sidebar.button("Cerrar sesión", use_container_width=True):
+    supabase.auth.sign_out()
+    st.session_state.pop("avi_auth_tokens", None)
+    st.rerun()
+
 
 if "opcion_nav" not in st.session_state:
     st.session_state["opcion_nav"] = "📊 Overview General"
@@ -48,37 +125,47 @@ opcion = st.session_state["opcion_nav"]
 # ---------------------------------------------------------
 def obtener_saldos_lotes():
     res_lotes = supabase.table("lotes").select("*, galpones(id, nombre, capacidad, granjas(id, nombre))").eq("activo", True).execute()
-    res_reg = supabase.table("registros_diarios").select("lote_id, mortalidad_hembra, mortalidad_macho, descarte_hembra, descarte_macho").execute()
-    
-    df_reg = pd.DataFrame(res_reg.data) if res_reg.data else pd.DataFrame()
+    res_diarios = supabase.table("registros_diarios").select(
+        "id, lote_id, mortalidad_hembra, mortalidad_macho, descarte_hembra, descarte_macho"
+    ).execute()
+    res_box = supabase.table("registros_diarios_box").select(
+        "registro_diario_id, mortalidad_hembra, mortalidad_macho, descarte_hembra, descarte_macho, registros_diarios(lote_id)"
+    ).execute()
+
     bajas_por_lote = {}
-    if not df_reg.empty:
-        df_reg.fillna(0, inplace=True)
-        grouped = df_reg.groupby("lote_id").sum()
-        for lote_id, row in grouped.iterrows():
-            bajas_por_lote[lote_id] = {
-                "bajas_h": row.get("mortalidad_hembra", 0) + row.get("descarte_hembra", 0),
-                "bajas_m": row.get("mortalidad_macho", 0) + row.get("descarte_macho", 0)
-            }
-            
+    diarios_con_detalle = set()
+    for registro in (res_box.data or []):
+        lote_id = (registro.get("registros_diarios") or {}).get("lote_id")
+        if lote_id is None:
+            continue
+        diario_id = registro.get("registro_diario_id")
+        diarios_con_detalle.add(diario_id)
+        bajas = bajas_por_lote.setdefault(lote_id, {"bajas_h": 0, "bajas_m": 0})
+        bajas["bajas_h"] += (registro.get("mortalidad_hembra") or 0) + (registro.get("descarte_hembra") or 0)
+        bajas["bajas_m"] += (registro.get("mortalidad_macho") or 0) + (registro.get("descarte_macho") or 0)
+
+    # Compatibilidad con registros históricos que solo tenían totales del lote.
+    for registro in (res_diarios.data or []):
+        if registro["id"] in diarios_con_detalle:
+            continue
+        bajas = bajas_por_lote.setdefault(registro["lote_id"], {"bajas_h": 0, "bajas_m": 0})
+        bajas["bajas_h"] += (registro.get("mortalidad_hembra") or 0) + (registro.get("descarte_hembra") or 0)
+        bajas["bajas_m"] += (registro.get("mortalidad_macho") or 0) + (registro.get("descarte_macho") or 0)
+
     saldos = {}
-    if res_lotes.data:
-        for l in res_lotes.data:
-            lote_id = l["id"]
-            inicial_h = l.get("aves_hembra", 0) or 0
-            inicial_m = l.get("aves_macho", 0) or 0
-            bajas = bajas_por_lote.get(lote_id, {"bajas_h": 0, "bajas_m": 0})
-            
-            saldo_h = max(0, int(inicial_h - bajas["bajas_h"]))
-            saldo_m = max(0, int(inicial_m - bajas["bajas_m"]))
-            saldo_total = saldo_h + saldo_m
-            
-            saldos[lote_id] = {
-                "lote": l,
-                "saldo_h": saldo_h,
-                "saldo_m": saldo_m,
-                "saldo_total": saldo_total
-            }
+    for lote in (res_lotes.data or []):
+        lote_id = lote["id"]
+        inicial_h = lote.get("aves_hembra", 0) or 0
+        inicial_m = lote.get("aves_macho", 0) or 0
+        bajas = bajas_por_lote.get(lote_id, {"bajas_h": 0, "bajas_m": 0})
+        saldo_h = max(0, int(inicial_h - bajas["bajas_h"]))
+        saldo_m = max(0, int(inicial_m - bajas["bajas_m"]))
+        saldos[lote_id] = {
+            "lote": lote,
+            "saldo_h": saldo_h,
+            "saldo_m": saldo_m,
+            "saldo_total": saldo_h + saldo_m,
+        }
     return saldos
 
 # ---------------------------------------------------------
@@ -202,7 +289,7 @@ elif opcion == "1. Granjas":
             submitted = st.form_submit_button("Guardar Granja")
             if submitted:
                 if nombre and lat is not None:
-                    supabase.table("granjas").insert({"nombre": nombre, "latitud": lat, "longitud": lng}).execute()
+                    supabase.table("granjas").insert({"organization_id": memberships[0]["organization_id"], "nombre": nombre, "latitud": lat, "longitud": lng}).execute()
                     st.success("¡Granja guardada con éxito!")
                     st.session_state["ver_formulario_granja"] = False
                     st.rerun()
@@ -527,6 +614,7 @@ elif opcion == "3. Lotes":
                         "galpon_id": dict_galpones[galpon_sel],
                         "codigo_lote": codigo_lote,
                         "proposito": proposito,
+                        "tipo_produccion": {"Engorde": "engorde", "Postura (Comercial)": "postura", "Reproductoras": "reproductoras"}[proposito],
                         "linea_genetica": linea,
                         "fecha_encaste": str(fecha_encaste),
                         "aves_hembra": tot_h_calculado,
@@ -569,150 +657,138 @@ elif opcion == "3. Lotes":
 # ---------------------------------------------------------
 elif opcion == "4. Ingreso Diario":
     st.header("4. Registro Diario por Boxes y Consolidado de Lote")
-    res_lotes = supabase.table("lotes").select("id, codigo_lote, linea_genetica, fecha_encaste, galpones(nombre)").eq("activo", True).execute()
-    
+    res_lotes = supabase.table("lotes").select("id, codigo_lote, linea_genetica, tipo_produccion, fecha_encaste, galpones(nombre)").eq("activo", True).execute()
+
     if res_lotes.data:
         lotes_dict = {
-            f"{l['codigo_lote']} ({l['galpones']['nombre']} - {l['linea_genetica']})": l 
+            f"{l['codigo_lote']} ({l['galpones']['nombre']} - {l['linea_genetica']})": l
             for l in res_lotes.data
         }
-        
-        lote_sel_nombre = st.selectbox("Seleccionar Lote Activo", list(lotes_dict.keys()))
-        lote_info = lotes_dict[lote_sel_nombre]
-        
+        lote_info = lotes_dict[st.selectbox("Seleccionar Lote Activo", list(lotes_dict.keys()))]
         fecha_registro = st.date_input("Fecha del Registro")
         fecha_encaste = pd.to_datetime(lote_info["fecha_encaste"]).date()
-        dias_diferencia = (fecha_registro - fecha_encaste).days
-        dia_vida_calculado = dias_diferencia + 1
-        
+        dia_vida_calculado = (fecha_registro - fecha_encaste).days + 1
+
         if dia_vida_calculado < 1:
             st.error(f"La fecha de registro no puede ser anterior al encaste ({fecha_encaste}).")
         else:
             st.info(f"📅 **Día de Vida (Edad):** Día {dia_vida_calculado}")
-            
-            # Consultar boxes asignados
             res_boxes = supabase.table("galpon_boxes").select("*").eq("lote_id", lote_info["id"]).order("nombre_box").execute()
-            list_boxes = res_boxes.data if res_boxes.data else []
-            
+            list_boxes = res_boxes.data or []
+
             if not list_boxes:
                 st.warning("Este lote no tiene boxes configurados. Ve al menú 'Lotes' y edita el lote para agregar boxes.")
             else:
-                # Comprobar si existe un registro general del día
-                res_existente = supabase.table("registros_diarios").select("*").eq("lote_id", lote_info["id"]).eq("fecha", str(fecha_registro)).execute()
+                res_existente = supabase.table("registros_diarios").select(
+                    "id, lote_id, fecha, dia_vida, mortalidad_hembra, mortalidad_macho, descarte_hembra, descarte_macho, consumo_alimento_kg, consumo_agua_litros, peso_promedio_hembra_g, peso_promedio_macho_g"
+                ).eq("lote_id", lote_info["id"]).eq("fecha", str(fecha_registro)).execute()
                 registro_previo = res_existente.data[0] if res_existente.data else None
-                
-                # Cargar registros por box previos si existen
-                dict_reg_box_previo = {}
+                dict_reg_box_previo, mediciones_previas = {}, {}
                 if registro_previo:
                     res_reg_b = supabase.table("registros_diarios_box").select("*").eq("registro_diario_id", registro_previo["id"]).execute()
-                    if res_reg_b.data:
-                        dict_reg_box_previo = {rb["box_id"]: rb for rb in res_reg_b.data}
+                    dict_reg_box_previo = {rb["box_id"]: rb for rb in (res_reg_b.data or [])}
+                    res_med = supabase.table("mediciones_produccion").select("*").eq("registro_diario_id", registro_previo["id"]).execute()
+                    mediciones_previas = {(m["box_id"], m["codigo_metrica"]): m["valor"] for m in (res_med.data or [])}
 
+                tipo = lote_info.get("tipo_produccion") or "engorde"
+                catalogo = supabase.table("metricas_produccion").select("*").eq("activa", True).execute()
+                metricas = [m for m in (catalogo.data or []) if tipo in (m.get("tipos_produccion") or [])]
                 st.subheader("📌 Captura de Datos Diarios por Box")
-                
                 datos_ingresados_boxes = []
-                
+
                 for b in list_boxes:
                     box_id = b["id"]
-                    box_nombre = b["nombre_box"]
                     prev_b = dict_reg_box_previo.get(box_id, {})
-                    
-                    with st.expander(f"📦 {box_nombre}", expanded=True):
+                    with st.expander(f"📦 {b['nombre_box']}", expanded=True):
                         c1, c2, c3, c4, c5, c6 = st.columns(6)
                         with c1:
-                            mh = st.number_input(f"Mort. Hembra", min_value=0, value=int(prev_b.get("mortalidad_hembra", 0)), key=f"mh_{box_id}")
+                            mh = st.number_input("Mort. Hembra", min_value=0, value=int(prev_b.get("mortalidad_hembra", 0)), key=f"mh_{box_id}")
                         with c2:
-                            mm = st.number_input(f"Mort. Macho", min_value=0, value=int(prev_b.get("mortalidad_macho", 0)), key=f"mm_{box_id}")
+                            mm = st.number_input("Mort. Macho", min_value=0, value=int(prev_b.get("mortalidad_macho", 0)), key=f"mm_{box_id}")
                         with c3:
-                            dh = st.number_input(f"Desc. Hembra", min_value=0, value=int(prev_b.get("descarte_hembra", 0)), key=f"dh_{box_id}")
+                            dh = st.number_input("Desc. Hembra", min_value=0, value=int(prev_b.get("descarte_hembra", 0)), key=f"dh_{box_id}")
                         with c4:
-                            dm = st.number_input(f"Desc. Macho", min_value=0, value=int(prev_b.get("descarte_macho", 0)), key=f"dm_{box_id}")
+                            dm = st.number_input("Desc. Macho", min_value=0, value=int(prev_b.get("descarte_macho", 0)), key=f"dm_{box_id}")
                         with c5:
-                            ali = st.number_input(f"Alimento (kg)", min_value=0.0, value=float(prev_b.get("consumo_alimento_kg", 0.0)), step=5.0, key=f"ali_{box_id}")
+                            ali = st.number_input("Alimento (kg)", min_value=0.0, value=float(prev_b.get("consumo_alimento_kg", 0.0)), step=5.0, key=f"ali_{box_id}")
                         with c6:
-                            agu = st.number_input(f"Agua (L)", min_value=0.0, value=float(prev_b.get("consumo_agua_litros", 0.0)), step=10.0, key=f"agu_{box_id}")
-                            
+                            agu = st.number_input("Agua (L)", min_value=0.0, value=float(prev_b.get("consumo_agua_litros", 0.0)), step=10.0, key=f"agu_{box_id}")
                         c7, c8 = st.columns(2)
                         with c7:
-                            ph = st.number_input(f"Peso Prom. Hembra (g)", min_value=0.0, value=float(prev_b.get("peso_promedio_hembra_g", 0.0)), key=f"ph_{box_id}")
+                            ph = st.number_input("Peso Prom. Hembra (g)", min_value=0.0, value=float(prev_b.get("peso_promedio_hembra_g", 0.0)), key=f"ph_{box_id}")
                         with c8:
-                            pm = st.number_input(f"Peso Prom. Macho (g)", min_value=0.0, value=float(prev_b.get("peso_promedio_macho_g", 0.0)), key=f"pm_{box_id}")
-                            
+                            pm = st.number_input("Peso Prom. Macho (g)", min_value=0.0, value=float(prev_b.get("peso_promedio_macho_g", 0.0)), key=f"pm_{box_id}")
+
+                        valores_metricas = []
+                        for metric in metricas:
+                            value = st.number_input(
+                                f"{metric['nombre']} ({metric['unidad']})",
+                                min_value=0.0,
+                                value=float(mediciones_previas.get((box_id, metric["codigo"]), 0)),
+                                key=f"metric_{metric['codigo']}_{box_id}",
+                            )
+                            valores_metricas.append({"codigo_metrica": metric["codigo"], "valor": value})
+
                         datos_ingresados_boxes.append({
                             "box_id": box_id,
                             "mh": mh, "mm": mm, "dh": dh, "dm": dm,
-                            "ali": ali, "agu": agu, "ph": ph, "pm": pm
+                            "ali": ali, "agu": agu, "ph": ph, "pm": pm,
+                            "metricas": valores_metricas,
                         })
 
-                # CÁLCULOS TOTALIZADOS Y PROMEDIOS PARA EL LOTE
-                tot_mh = sum(item["mh"] for item in datos_ingresados_boxes)
-                tot_mm = sum(item["mm"] for item in datos_ingresados_boxes)
-                tot_dh = sum(item["dh"] for item in datos_ingresados_boxes)
-                tot_dm = sum(item["dm"] for item in datos_ingresados_boxes)
-                tot_ali = sum(item["ali"] for item in datos_ingresados_boxes)
-                tot_agu = sum(item["agu"] for item in datos_ingresados_boxes)
-                
-                # Promedios ponderados sencillos para peso de lote
-                pesos_h = [item["ph"] for item in datos_ingresados_boxes if item["ph"] > 0]
-                pesos_m = [item["pm"] for item in datos_ingresados_boxes if item["pm"] > 0]
-                
-                prom_ph = (sum(pesos_h) / len(pesos_h)) if pesos_h else 0.0
-                prom_pm = (sum(pesos_m) / len(pesos_m)) if pesos_m else 0.0
-                prom_mix = (prom_ph + prom_pm) / 2 if (prom_ph > 0 and prom_pm > 0) else (prom_ph or prom_pm)
-
+                tot_mh = sum(x["mh"] for x in datos_ingresados_boxes)
+                tot_mm = sum(x["mm"] for x in datos_ingresados_boxes)
+                tot_dh = sum(x["dh"] for x in datos_ingresados_boxes)
+                tot_dm = sum(x["dm"] for x in datos_ingresados_boxes)
+                tot_ali = sum(x["ali"] for x in datos_ingresados_boxes)
+                tot_agu = sum(x["agu"] for x in datos_ingresados_boxes)
                 st.markdown("---")
-                st.subheader("📊 Consolidado Automático del Lote (Día Actual)")
-                
+                st.subheader("📊 Consolidado Automático (calculado desde el detalle por box)")
                 k1, k2, k3, k4 = st.columns(4)
                 k1.metric("Mortalidad Total", f"{tot_mh + tot_mm} aves")
                 k2.metric("Descarte Total", f"{tot_dh + tot_dm} aves")
                 k3.metric("Alimento Consumido", f"{tot_ali:.1f} kg")
                 k4.metric("Agua Consumida", f"{tot_agu:.1f} L")
 
-                btn_label = "Actualizar Registro Diario" if registro_previo else "Guardar Registro Diario del Lote"
-                if st.button(btn_label, type="primary"):
-                    reg_general = {
-                        "lote_id": lote_info["id"],
-                        "fecha": str(fecha_registro),
-                        "dia_vida": int(dia_vida_calculado),
-                        "mortalidad_hembra": tot_mh,
-                        "mortalidad_macho": tot_mm,
-                        "descarte_hembra": tot_dh,
-                        "descarte_macho": tot_dm,
-                        "descartes": tot_dh + tot_dm,
-                        "consumo_alimento_kg": tot_ali,
-                        "consumo_agua_litros": tot_agu,
-                        "peso_promedio_hembra_g": prom_ph,
-                        "peso_promedio_macho_g": prom_pm,
-                        "peso_promedio_mixto_g": prom_mix
-                    }
-                    
+                label = "Actualizar Registro Diario" if registro_previo else "Guardar Registro Diario del Lote"
+                if st.button(label, type="primary"):
+                    header = {"lote_id": lote_info["id"], "fecha": str(fecha_registro), "dia_vida": int(dia_vida_calculado)}
                     if registro_previo:
                         reg_id = registro_previo["id"]
-                        supabase.table("registros_diarios").update(reg_general).eq("id", reg_id).execute()
-                        supabase.table("registros_diarios_box").delete().eq("registro_diario_id", reg_id).execute()
+                        supabase.table("registros_diarios").update(header).eq("id", reg_id).execute()
                     else:
-                        res_reg_ins = supabase.table("registros_diarios").insert(reg_general).execute()
-                        reg_id = res_reg_ins.data[0]["id"]
-                        
-                    filas_reg_box = [
-                        {
+                        reg_id = supabase.table("registros_diarios").insert(header).execute().data[0]["id"]
+
+                    filas_box = [{
+                        "registro_diario_id": reg_id,
+                        "box_id": x["box_id"],
+                        "mortalidad_hembra": x["mh"],
+                        "mortalidad_macho": x["mm"],
+                        "descarte_hembra": x["dh"],
+                        "descarte_macho": x["dm"],
+                        "consumo_alimento_kg": x["ali"],
+                        "consumo_agua_litros": x["agu"],
+                        "peso_promedio_hembra_g": x["ph"],
+                        "peso_promedio_macho_g": x["pm"],
+                    } for x in datos_ingresados_boxes]
+                    supabase.table("registros_diarios_box").upsert(
+                        filas_box, on_conflict="registro_diario_id,box_id"
+                    ).execute()
+
+                    for x in datos_ingresados_boxes:
+                        supabase.table("mediciones_produccion").delete().eq(
+                            "registro_diario_id", reg_id
+                        ).eq("box_id", x["box_id"]).execute()
+                        filas_metricas = [{
                             "registro_diario_id": reg_id,
-                            "box_id": b["box_id"],
-                            "mortalidad_hembra": b["mh"],
-                            "mortalidad_macho": b["mm"],
-                            "descarte_hembra": b["dh"],
-                            "descarte_macho": b["dm"],
-                            "consumo_alimento_kg": b["ali"],
-                            "consumo_agua_litros": b["agu"],
-                            "peso_promedio_hembra_g": b["ph"],
-                            "peso_promedio_macho_g": b["pm"]
-                        }
-                        for b in datos_ingresados_boxes
-                    ]
-                    supabase.table("registros_diarios_box").insert(filas_reg_box).execute()
-                    
-                    st.success("¡Registro diario por box y consolidado de lote guardado exitosamente!")
+                            "box_id": x["box_id"],
+                            "codigo_metrica": m["codigo_metrica"],
+                            "valor": m["valor"],
+                        } for m in x["metricas"]]
+                        if filas_metricas:
+                            supabase.table("mediciones_produccion").insert(filas_metricas).execute()
+
+                    st.success("Registro diario guardado. Los totales se calculan desde el detalle por box.")
                     st.rerun()
     else:
         st.info("No hay lotes activos actualmente.")
@@ -722,17 +798,65 @@ elif opcion == "4. Ingreso Diario":
 # ---------------------------------------------------------
 elif opcion == "📈 Análisis Gerencial":
     st.header("📈 Análisis Gerencial de Lotes")
-    res = supabase.table("registros_diarios").select("*, lotes(codigo_lote, linea_genetica)").execute()
-    
-    if res.data:
-        df = pd.DataFrame(res.data)
-        st.subheader("Tabla Consolidada de Registros General")
+    res_diarios = supabase.table("registros_diarios").select(
+        "id, lote_id, fecha, dia_vida, mortalidad_hembra, mortalidad_macho, descarte_hembra, descarte_macho, consumo_alimento_kg, consumo_agua_litros, peso_promedio_mixto_g, peso_promedio_hembra_g, peso_promedio_macho_g, lotes(codigo_lote, linea_genetica)"
+    ).execute()
+    res_detalle = supabase.table("registros_diarios_box").select(
+        "registro_diario_id, mortalidad_hembra, mortalidad_macho, descarte_hembra, descarte_macho, consumo_alimento_kg, consumo_agua_litros, peso_promedio_hembra_g, peso_promedio_macho_g"
+    ).execute()
+
+    detalle_por_registro = {}
+    for dato in (res_detalle.data or []):
+        resumen = detalle_por_registro.setdefault(dato["registro_diario_id"], {
+            "mortalidad_hembra": 0, "mortalidad_macho": 0, "descarte_hembra": 0,
+            "descarte_macho": 0, "consumo_alimento_kg": 0.0, "consumo_agua_litros": 0.0,
+            "pesos_h": [], "pesos_m": [],
+        })
+        for campo in ("mortalidad_hembra", "mortalidad_macho", "descarte_hembra", "descarte_macho", "consumo_alimento_kg", "consumo_agua_litros"):
+            resumen[campo] += dato.get(campo) or 0
+        if dato.get("peso_promedio_hembra_g"):
+            resumen["pesos_h"].append(float(dato["peso_promedio_hembra_g"]))
+        if dato.get("peso_promedio_macho_g"):
+            resumen["pesos_m"].append(float(dato["peso_promedio_macho_g"]))
+
+    filas = []
+    for registro in (res_diarios.data or []):
+        detalle = detalle_por_registro.get(registro["id"])
+        if detalle:
+            peso_h = sum(detalle["pesos_h"]) / len(detalle["pesos_h"]) if detalle["pesos_h"] else 0
+            peso_m = sum(detalle["pesos_m"]) / len(detalle["pesos_m"]) if detalle["pesos_m"] else 0
+            peso_mix = (peso_h + peso_m) / 2 if peso_h and peso_m else (peso_h or peso_m)
+            fila = {campo: detalle[campo] for campo in (
+                "mortalidad_hembra", "mortalidad_macho", "descarte_hembra",
+                "descarte_macho", "consumo_alimento_kg", "consumo_agua_litros"
+            )}
+            fila.update({
+                "peso_promedio_hembra_g": peso_h,
+                "peso_promedio_macho_g": peso_m,
+                "peso_promedio_mixto_g": peso_mix,
+            })
+        else:
+            fila = {campo: registro.get(campo) or 0 for campo in (
+                "mortalidad_hembra", "mortalidad_macho", "descarte_hembra", "descarte_macho",
+                "consumo_alimento_kg", "consumo_agua_litros", "peso_promedio_hembra_g",
+                "peso_promedio_macho_g", "peso_promedio_mixto_g"
+            )}
+        fila.update({
+            "fecha": registro["fecha"],
+            "dia_vida": registro["dia_vida"],
+            "lote_id": registro["lote_id"],
+            "codigo_lote": (registro.get("lotes") or {}).get("codigo_lote", ""),
+            "linea_genetica": (registro.get("lotes") or {}).get("linea_genetica", ""),
+        })
+        filas.append(fila)
+
+    if filas:
+        df = pd.DataFrame(filas).sort_values(["lote_id", "dia_vida"])
+        st.subheader("Tabla Consolidada de Registros")
         st.dataframe(df, use_container_width=True)
-        
         st.subheader("Evolución de Pesos Promedio")
-        st.line_chart(df, x="dia_vida", y=["peso_promedio_mixto_g", "peso_promedio_hembra_g", "peso_promedio_macho_g"])
-        
+        st.line_chart(df, x="dia_vida", y=["peso_promedio_mixto_g", "peso_promedio_hembra_g", "peso_promedio_macho_g"], color="codigo_lote")
         st.subheader("Consumo Diario de Alimento (kg)")
-        st.bar_chart(df, x="dia_vida", y="consumo_alimento_kg")
+        st.bar_chart(df, x="dia_vida", y="consumo_alimento_kg", color="codigo_lote")
     else:
         st.info("Aún no hay datos cargados.")
