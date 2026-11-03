@@ -1,11 +1,105 @@
 import os
+import json
+from urllib import request as urllib_request
+from urllib.error import HTTPError, URLError
+from html import escape
 import streamlit as st
 import pandas as pd
 from supabase import create_client
 from streamlit_folium import st_folium
 import folium
 
-st.set_page_config(page_title="Sistema Avícola", layout="wide")
+st.set_page_config(
+    page_title="AviData · Gestión avícola",
+    page_icon="🐓",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+st.markdown(
+    """
+    <style>
+    :root {
+      --avi-forest: #173d32;
+      --avi-green: #27745a;
+      --avi-mint: #e7f2eb;
+      --avi-ink: #1e2b25;
+      --avi-muted: #64736b;
+      --avi-line: #e2e9e3;
+      --avi-paper: #ffffff;
+      --avi-bg: #f4f7f4;
+    }
+    .stApp { background: var(--avi-bg); color: var(--avi-ink); }
+    [data-testid="stHeader"] { background: transparent; }
+    [data-testid="stSidebar"] {
+      background: linear-gradient(180deg, #123328 0%, #1b493a 100%);
+      border-right: 1px solid rgba(255,255,255,.08);
+    }
+    [data-testid="stSidebar"] * { color: #edf5ef; }
+    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p { color: #bfd2c6; }
+    [data-testid="stSidebar"] [data-testid="stRadio"] label { color: #e8f1eb; }
+    [data-testid="stSidebar"] [data-testid="stRadio"] > div { gap: .35rem; }
+    [data-testid="stSidebar"] [data-testid="stRadio"] label div[role="radio"] {
+      border-radius: 10px;
+    }
+    [data-testid="stSidebar"] .stButton > button {
+      border: 1px solid rgba(255,255,255,.17);
+      border-radius: 10px;
+      background: rgba(255,255,255,.08);
+      color: #f5faf6;
+    }
+    [data-testid="stSidebar"] .stButton > button:hover {
+      border-color: #a6d4b4; background: rgba(255,255,255,.14);
+    }
+    .block-container { padding-top: 2.1rem; padding-bottom: 3rem; max-width: 1500px; }
+    h1, h2, h3 { color: var(--avi-ink); letter-spacing: -.025em; }
+    h1 { font-size: clamp(1.8rem, 3vw, 2.5rem) !important; font-weight: 700 !important; }
+    h2 { font-size: 1.45rem !important; font-weight: 650 !important; }
+    .avi-brand { font-size: 1.18rem; font-weight: 750; letter-spacing: .02em; color: #fff; }
+    .avi-brand small { display:block; margin-top:.15rem; color:#b9d4c4; font-size:.72rem; font-weight:500; letter-spacing:.08em; text-transform:uppercase; }
+    .avi-side-card {
+      margin:.6rem 0 .8rem; padding:.85rem .9rem; border:1px solid rgba(255,255,255,.15);
+      border-radius:14px; background:rgba(255,255,255,.07);
+    }
+    .avi-side-card .label { color:#b9d4c4; font-size:.68rem; text-transform:uppercase; letter-spacing:.09em; }
+    .avi-side-card .value { color:#fff; font-size:.94rem; font-weight:650; margin-top:.2rem; }
+    .avi-side-card .subvalue { color:#cfdfd4; font-size:.78rem; margin-top:.14rem; }
+    .avi-hero {
+      display:flex; justify-content:space-between; align-items:flex-end; gap:1rem;
+      margin:0 0 1.5rem; padding:1.35rem 1.55rem; border:1px solid var(--avi-line);
+      border-radius:20px; background:linear-gradient(115deg,#fff 0%,#f7fbf7 65%,#e7f2eb 100%);
+      box-shadow:0 8px 28px rgba(30,55,41,.045);
+    }
+    .avi-hero .eyebrow { margin:0 0 .35rem; color:var(--avi-green); font-size:.72rem; font-weight:700; letter-spacing:.1em; text-transform:uppercase; }
+    .avi-hero h1 { margin:0; color:var(--avi-ink); }
+    .avi-hero .description { margin:.35rem 0 0; color:var(--avi-muted); font-size:.94rem; }
+    .avi-role-pill { padding:.42rem .72rem; border-radius:999px; background:var(--avi-mint); color:var(--avi-forest); font-size:.78rem; font-weight:700; white-space:nowrap; }
+    [data-testid="stMetric"] {
+      padding:1rem 1.15rem; border:1px solid var(--avi-line); border-radius:16px;
+      background:var(--avi-paper); box-shadow:0 5px 18px rgba(30,55,41,.035);
+    }
+    [data-testid="stMetricLabel"] { color:var(--avi-muted); font-weight:600; }
+    [data-testid="stMetricValue"] { color:var(--avi-forest); font-weight:750; }
+    .stButton > button, [data-testid="stFormSubmitButton"] > button {
+      border-radius:10px; font-weight:650; transition:all .16s ease;
+    }
+    .stButton > button[kind="primary"], [data-testid="stFormSubmitButton"] > button[kind="primary"] {
+      background:var(--avi-green); border-color:var(--avi-green); color:white;
+    }
+    .stButton > button:hover, [data-testid="stFormSubmitButton"] > button:hover { transform:translateY(-1px); }
+    [data-testid="stDataFrame"], [data-testid="stTable"] { border:1px solid var(--avi-line); border-radius:14px; overflow:hidden; }
+    [data-testid="stForm"] { padding:1.1rem; border:1px solid var(--avi-line); border-radius:16px; background:#fff; }
+    [data-testid="stTextInput"] input, [data-testid="stNumberInput"] input, [data-testid="stDateInput"] input,
+    [data-testid="stSelectbox"] [data-baseweb="select"] > div { border-radius:10px; }
+    .avi-section-label { margin:.6rem 0 .25rem; color:#a9c6b4; font-size:.67rem; font-weight:700; letter-spacing:.11em; text-transform:uppercase; }
+    @media (max-width: 760px) {
+      .block-container { padding:1.1rem .9rem 2rem; }
+      .avi-hero { align-items:flex-start; flex-direction:column; padding:1.1rem; }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
 
 URL = os.getenv("SUPABASE_URL", "https://zmpqrcqadrxevqyshvak.supabase.co")
 KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "sb_publishable_--thXNjoDX0MmxrcOBFCLg_Lo5hHeCG")
@@ -13,7 +107,12 @@ supabase = create_client(URL, KEY)
 
 # La base aplica RLS por usuario autenticado y organización.
 if "avi_auth_tokens" not in st.session_state:
-    st.title("Sistema de Control Avícola 🐔")
+    st.markdown(
+        '<div class="avi-hero"><div><p class="eyebrow">Gestión avícola</p><h1>AviData</h1>'
+        '<p class="description">Datos claros para decisiones más precisas en tu producción.</p></div>'
+        '<span class="avi-role-pill">Acceso seguro</span></div>',
+        unsafe_allow_html=True,
+    )
     with st.form("avi_login"):
         email = st.text_input("Correo electrónico")
         password = st.text_input("Contraseña", type="password")
@@ -51,7 +150,7 @@ membership_result = supabase.table("organization_memberships").select(
 ).execute()
 memberships = membership_result.data or []
 if not memberships:
-    st.title("Sistema de Control Avícola 🐔")
+    st.markdown('<div class="avi-hero"><div><p class="eyebrow">AviData</p><h1>Conecta tu organización</h1></div></div>', unsafe_allow_html=True)
     st.info("Tu usuario aún no pertenece a una organización.")
     with st.form("avi_create_organization"):
         organization_name = st.text_input("Nombre de tu organización")
@@ -68,15 +167,60 @@ if not memberships:
         st.rerun()
     st.stop()
 
-st.title("Sistema de Control Avícola 🐔")
+active_user_result = supabase.auth.get_user()
+current_user = active_user_result.user
+organization = (memberships[0].get("organizations") or {}).get("name", "Organización")
+organization_id = memberships[0]["organization_id"]
+current_role = memberships[0].get("role", "operator")
+profile_result = supabase.table("user_profiles").select(
+    "full_name, username, job_title"
+).eq("user_id", current_user.id).maybe_single().execute()
+profile = profile_result.data or {}
+if not profile:
+    guessed_name = (current_user.user_metadata or {}).get("full_name") or (current_user.email or "Usuario").split("@")[0]
+    guessed_username = (current_user.email or "usuario").split("@")[0]
+    profile = {"full_name": guessed_name, "username": guessed_username, "job_title": ""}
+
+def call_user_admin(payload):
+    body = json.dumps({"organization_id": organization_id, **payload}).encode("utf-8")
+    req = urllib_request.Request(
+        f"{URL}/functions/v1/manage-organization-users",
+        data=body,
+        headers={
+            "Authorization": "Bearer " + st.session_state["avi_auth_tokens"]["access_token"],
+            "apikey": KEY,
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib_request.urlopen(req, timeout=30) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except HTTPError as exc:
+        try:
+            return json.loads(exc.read().decode("utf-8"))
+        except Exception:
+            return {"error": f"El servidor devolvió el código {exc.code}."}
+    except (URLError, TimeoutError):
+        return {"error": "No se pudo conectar con el servicio de administración."}
 
 # ---------------------------------------------------------
 # NAVEGACIÓN
 # ---------------------------------------------------------
-st.sidebar.title("Menú Principal")
-st.sidebar.caption("Organización: " + ", ".join((m.get("organizations") or {}).get("name", "Sin nombre") for m in memberships))
+st.sidebar.markdown('<div class="avi-brand">AviData<small>Gestión avícola</small></div>', unsafe_allow_html=True)
+st.sidebar.markdown(
+    '<div class="avi-side-card"><div class="label">Organización</div><div class="value">'
+    + escape(organization) + '</div></div>', unsafe_allow_html=True
+)
+st.sidebar.markdown(
+    '<div class="avi-side-card"><div class="label">Cuenta</div><div class="value">'
+    + escape(profile.get("full_name") or "Usuario") + '</div><div class="subvalue">@'
+    + escape(profile.get("username") or "usuario") + " · "
+    + escape(profile.get("job_title") or "Cargo no definido") + " · Rol "
+    + escape(current_role.title()) + "</div></div>", unsafe_allow_html=True
+)
 plan_result = supabase.table("organization_subscriptions").select("plan_code").eq(
-    "organization_id", memberships[0]["organization_id"]
+    "organization_id", organization_id
 ).execute()
 if plan_result.data:
     plan_code = plan_result.data[0]["plan_code"]
@@ -97,7 +241,7 @@ if st.sidebar.button("Cerrar sesión", use_container_width=True):
 if "opcion_nav" not in st.session_state:
     st.session_state["opcion_nav"] = "📊 Overview General"
 
-if st.sidebar.button("📊 Overview General", use_container_width=True):
+if st.sidebar.button("Inicio · Overview", use_container_width=True):
     st.session_state["opcion_nav"] = "📊 Overview General"
 
 with st.sidebar.expander("📝 Registros / Operación", expanded=True):
@@ -115,10 +259,33 @@ with st.sidebar.expander("📝 Registros / Operación", expanded=True):
     if st.button("4. Ingreso Diario", use_container_width=True):
         st.session_state["opcion_nav"] = "4. Ingreso Diario"
 
-if st.sidebar.button("📈 Análisis Gerencial", use_container_width=True):
+if current_role in ("owner", "admin", "analyst") and st.sidebar.button("Análisis gerencial", use_container_width=True):
     st.session_state["opcion_nav"] = "📈 Análisis Gerencial"
 
+with st.sidebar.expander("Cuenta y organización", expanded=False):
+    if st.button("Mi perfil", use_container_width=True):
+        st.session_state["opcion_nav"] = "Mi perfil"
+    if current_role in ("owner", "admin") and st.button("Usuarios y permisos", use_container_width=True):
+        st.session_state["opcion_nav"] = "Usuarios y permisos"
+
 opcion = st.session_state["opcion_nav"]
+
+page_meta = {
+    "📊 Overview General": ("Inicio", "Vista general", "Un resumen de tus granjas, lotes y aves activas."),
+    "1. Granjas": ("Operación", "Granjas", "Ubicaciones y datos principales de tus granjas."),
+    "2. Galpones": ("Operación", "Galpones", "Capacidad e infraestructura de producción."),
+    "3. Lotes": ("Producción", "Lotes", "Alojamiento, genética y distribución de aves."),
+    "4. Ingreso Diario": ("Producción", "Registro diario", "Captura de indicadores por box y lote."),
+    "📈 Análisis Gerencial": ("Inteligencia productiva", "Análisis gerencial", "Indicadores para entender la evolución de tu producción."),
+}
+if opcion in page_meta:
+    eyebrow, page_title, page_description = page_meta[opcion]
+    st.markdown(
+        '<div class="avi-hero"><div><p class="eyebrow">' + escape(eyebrow) + '</p><h1>'
+        + escape(page_title) + '</h1><p class="description">' + escape(page_description)
+        + '</p></div><span class="avi-role-pill">' + escape(organization)
+        + '</span></div>', unsafe_allow_html=True,
+    )
 
 # ---------------------------------------------------------
 # HELPER: SALDOS DE AVES Y BOXES POR LOTE
@@ -169,10 +336,123 @@ def obtener_saldos_lotes():
     return saldos
 
 # ---------------------------------------------------------
+# PERFIL Y ADMINISTRACIÓN DE ORGANIZACIÓN
+# ---------------------------------------------------------
+if opcion == "Mi perfil":
+    st.markdown(
+        '<div class="avi-hero"><div><p class="eyebrow">Cuenta de usuario</p><h1>Mi perfil</h1>'
+        '<p class="description">Tu identidad y cargo dentro de la organización.</p></div>'
+        '<span class="avi-role-pill">' + escape(current_role.title()) + '</span></div>',
+        unsafe_allow_html=True,
+    )
+    st.info(f"Organización: **{organization}** · Correo: **{current_user.email or '—'}**")
+    with st.form("profile_form"):
+        full_name = st.text_input("Nombre completo", value=profile.get("full_name", ""))
+        col_user, col_job = st.columns(2)
+        with col_user:
+            username = st.text_input("Nombre de usuario", value=profile.get("username", ""))
+        with col_job:
+            job_title = st.text_input("Cargo", value=profile.get("job_title", ""))
+        if st.form_submit_button("Guardar perfil", type="primary"):
+            if not full_name.strip() or not username.strip():
+                st.error("El nombre y el usuario son obligatorios.")
+            else:
+                try:
+                    supabase.table("user_profiles").upsert({
+                        "user_id": current_user.id, "full_name": full_name.strip(),
+                        "username": username.strip(), "job_title": job_title.strip(),
+                        "updated_at": pd.Timestamp.now(tz="UTC").isoformat(),
+                    }).execute()
+                    st.success("Perfil actualizado.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"No se pudo guardar el perfil: {exc}")
+
+elif opcion == "Usuarios y permisos" and current_role in ("owner", "admin"):
+    st.markdown(
+        '<div class="avi-hero"><div><p class="eyebrow">Administración de acceso</p><h1>Usuarios y permisos</h1>'
+        '<p class="description">Invita a tu equipo y define qué puede hacer cada persona.</p></div>'
+        '<span class="avi-role-pill">' + escape(organization) + '</span></div>',
+        unsafe_allow_html=True,
+    )
+    st.caption("Administrador: configura usuarios y accesos · Analista: consulta análisis · Operador: registra y gestiona la operación diaria.")
+    with st.expander("Invitar usuario a la organización", expanded=True):
+        with st.form("invite_org_user"):
+            invite_name = st.text_input("Nombre completo")
+            invite_email = st.text_input("Correo electrónico")
+            c_user, c_job = st.columns(2)
+            with c_user:
+                invite_username = st.text_input("Nombre de usuario")
+            with c_job:
+                invite_job = st.text_input("Cargo")
+            invite_role = st.selectbox("Permiso", ["operator", "analyst", "admin"], format_func={
+                "operator": "Operador · captura diaria y operación",
+                "analyst": "Analista · lectura y análisis",
+                "admin": "Administrador · usuarios, permisos y operación",
+            }.get)
+            if st.form_submit_button("Enviar invitación", type="primary"):
+                result = call_user_admin({
+                    "action": "invite", "email": invite_email, "full_name": invite_name,
+                    "username": invite_username, "job_title": invite_job, "role": invite_role,
+                })
+                if result.get("error"):
+                    st.error(result["error"])
+                else:
+                    st.success(f"Acceso asignado a {invite_email}. La persona recibirá la invitación de Supabase si aún no tiene cuenta.")
+                    st.rerun()
+
+    members_result = call_user_admin({"action": "list"})
+    if members_result.get("error"):
+        st.error(members_result["error"])
+        st.caption("Si acabas de desplegar la función, espera unos segundos y vuelve a cargar la página.")
+    else:
+        members = members_result.get("members", [])
+        st.subheader(f"Miembros de {members_result.get('organization', organization)} · {len(members)}")
+        if members:
+            st.dataframe(pd.DataFrame([{
+                "Nombre": m.get("full_name") or "—", "Usuario": "@" + (m.get("username") or "—"),
+                "Correo": m.get("email") or "—", "Cargo": m.get("job_title") or "—",
+                "Permiso": m.get("role", "—").title(),
+            } for m in members]), use_container_width=True, hide_index=True)
+            editable = [m for m in members if m.get("role") != "owner" and m.get("user_id") != current_user.id]
+            if editable:
+                member_options = {f"{m.get('full_name') or m.get('email')} · {m.get('email')}": m for m in editable}
+                selected_label = st.selectbox("Editar miembro", list(member_options))
+                selected_member = member_options[selected_label]
+                with st.form("edit_org_user"):
+                    edit_name = st.text_input("Nombre completo", value=selected_member.get("full_name") or "")
+                    edit_username = st.text_input("Nombre de usuario", value=selected_member.get("username") or "")
+                    edit_job = st.text_input("Cargo", value=selected_member.get("job_title") or "")
+                    role_options = ["operator", "analyst", "admin"]
+                    default_role_index = role_options.index(selected_member["role"]) if selected_member.get("role") in role_options else 0
+                    edit_role = st.selectbox("Permiso", role_options, index=default_role_index, format_func={
+                        "operator": "Operador", "analyst": "Analista", "admin": "Administrador",
+                    }.get)
+                    save_member = st.form_submit_button("Guardar cambios", type="primary")
+                if save_member:
+                    result = call_user_admin({
+                        "action": "update", "user_id": selected_member["user_id"],
+                        "full_name": edit_name, "username": edit_username,
+                        "job_title": edit_job, "role": edit_role,
+                    })
+                    if result.get("error"):
+                        st.error(result["error"])
+                    else:
+                        st.success("Perfil y permisos actualizados.")
+                        st.rerun()
+                if st.button("Retirar acceso a esta organización", type="secondary"):
+                    result = call_user_admin({"action": "remove", "user_id": selected_member["user_id"]})
+                    if result.get("error"):
+                        st.error(result["error"])
+                    else:
+                        st.success("Se retiró la membresía. La cuenta de Supabase se mantiene intacta.")
+                        st.rerun()
+
+# ---------------------------------------------------------
 # OVERVIEW GENERAL
 # ---------------------------------------------------------
-if opcion == "📊 Overview General":
-    st.header("📊 Vista General del Sistema")
+elif opcion == "📊 Overview General":
+    st.subheader("Indicadores de producción")
     res_granjas = supabase.table("granjas").select("*").execute()
     saldos_dict = obtener_saldos_lotes()
     
@@ -213,7 +493,7 @@ elif opcion == "1. Granjas":
 
     col_tit, col_btn = st.columns([4, 1])
     with col_tit:
-        st.header("1. Gestión de Granjas")
+        st.subheader("Gestión de granjas")
     with col_btn:
         if not st.session_state["ver_formulario_granja"]:
             if st.button("➕ Registrar Granja", type="primary", use_container_width=True):
@@ -305,7 +585,7 @@ elif opcion == "2. Galpones":
 
     col_tit, col_btn = st.columns([4, 1])
     with col_tit:
-        st.header("2. Gestión de Galpones")
+        st.subheader("Gestión de galpones")
     with col_btn:
         if not st.session_state["ver_formulario_galpon"] and st.session_state["galpon_a_editar"] is None:
             if st.button("➕ Crear Galpón", type="primary", use_container_width=True):
@@ -447,7 +727,7 @@ elif opcion == "3. Lotes":
 
     col_tit, col_btn = st.columns([4, 1])
     with col_tit:
-        st.header("3. Gestión de Lotes")
+        st.subheader("Gestión de lotes")
     with col_btn:
         if not st.session_state["ver_formulario_lote"] and st.session_state["lote_a_editar"] is None:
             if st.button("➕ Crear Nuevo Lote", type="primary", use_container_width=True):
@@ -656,7 +936,7 @@ elif opcion == "3. Lotes":
 # 4. INGRESO DIARIO POR BOX Y CÁLCULO DE LOTE
 # ---------------------------------------------------------
 elif opcion == "4. Ingreso Diario":
-    st.header("4. Registro Diario por Boxes y Consolidado de Lote")
+    st.subheader("Registro diario por boxes y consolidado de lote")
     res_lotes = supabase.table("lotes").select("id, codigo_lote, linea_genetica, tipo_produccion, fecha_encaste, galpones(nombre)").eq("activo", True).execute()
 
     if res_lotes.data:
@@ -797,7 +1077,7 @@ elif opcion == "4. Ingreso Diario":
 # 5. ANÁLISIS GERENCIAL
 # ---------------------------------------------------------
 elif opcion == "📈 Análisis Gerencial":
-    st.header("📈 Análisis Gerencial de Lotes")
+    st.subheader("Análisis gerencial de lotes")
     res_diarios = supabase.table("registros_diarios").select(
         "id, lote_id, fecha, dia_vida, mortalidad_hembra, mortalidad_macho, descarte_hembra, descarte_macho, consumo_alimento_kg, consumo_agua_litros, peso_promedio_mixto_g, peso_promedio_hembra_g, peso_promedio_macho_g, lotes(codigo_lote, linea_genetica)"
     ).execute()
