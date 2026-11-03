@@ -11,24 +11,20 @@ Borrador de una aplicación Streamlit para organizar granjas, galpones, lotes y 
 - Las métricas por tipo de producción usan un catálogo y mediciones normalizadas.
 - El acceso de datos usa Supabase Auth y RLS.
 
-## Datos de prueba
+## Organización de prueba y usuarios
 
-La organización `Cristopher Martinez` tiene el plan `full` activo. Las granjas existentes se asignaron a esa organización. No hay usuarios en Supabase Auth todavía, así que la organización no tiene una membresía propietaria y sus datos siguen protegidos por RLS hasta que se cree y vincule la cuenta del propietario.
+La organización `Martinez_Poultry` tiene el plan `Full` activo, sin límite de galpones. La cuenta de prueba `jcmartinezreyes28@gmail.com` tiene rol `admin` y perfil `Jean Cristopher Martinez Reyes` · `@jcmartinezreyes28` · `Gerente general`.
 
-Después de crear/invitar la cuenta en Supabase Auth, asocia su UUID con esta organización desde SQL Editor:
+El perfil se almacena en `user_profiles`; el rol sigue separado en `organization_memberships`. La app permite que cada usuario edite su perfil y que un `owner` o `admin` invite miembros, cambie los roles/perfiles y retire su membresía. Retirar acceso no elimina la cuenta de Supabase Auth.
 
-```sql
--- Reemplaza el UUID de usuario por el que aparece en auth.users.
-update public.organizations
-set created_by = 'UUID-DEL-USUARIO'
-where name = 'Cristopher Martinez';
+Roles disponibles:
 
-insert into public.organization_memberships (organization_id, user_id, role)
-select id, 'UUID-DEL-USUARIO', 'owner'
-from public.organizations
-where name = 'Cristopher Martinez'
-on conflict (organization_id, user_id) do update set role = 'owner';
-```
+- `admin`: administra miembros, permisos y operación.
+- `analyst`: accede a consultas gerenciales, con escritura bloqueada por RLS.
+- `operator`: gestiona registros de la operación diaria.
+- `owner`: propietario de organización, reservado para el titular.
+
+La administración de usuarios usa la Edge Function `manage-organization-users` con verificación JWT activada. La función valida al usuario y su rol dentro de la organización antes de usar privilegios administrativos. Nunca se coloca una clave `service_role` en la app Streamlit.
 
 ## Ejecutar
 
@@ -42,3 +38,4 @@ Configura `SUPABASE_URL` y `SUPABASE_PUBLISHABLE_KEY` en el entorno, instala `re
 - `20261103201838_commercial_plans_and_galpon_limit.sql`
 - `20261103201844_seed_cristopher_full_test_organization.sql`
 - `20261103201948_serialize_galpon_plan_limit.sql`
+- `20261103233442_user_profiles_for_org_members.sql`
