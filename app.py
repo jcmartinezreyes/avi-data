@@ -216,7 +216,8 @@ st.sidebar.markdown(
     '<div class="avi-side-card"><div class="label">Cuenta</div><div class="value">'
     + escape(profile.get("full_name") or "Usuario") + '</div><div class="subvalue">@'
     + escape(profile.get("username") or "usuario") + " · "
-    + escape(profile.get("job_title") or "Cargo no definido") + "</div></div>", unsafe_allow_html=True
+    + escape(profile.get("job_title") or "Cargo no definido") + " · Rol "
+    + escape(current_role.title()) + "</div></div>", unsafe_allow_html=True
 )
 plan_result = supabase.table("organization_subscriptions").select("plan_code").eq(
     "organization_id", organization_id
