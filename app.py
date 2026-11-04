@@ -6,8 +6,6 @@ from html import escape
 import streamlit as st
 import pandas as pd
 from supabase import create_client
-from streamlit_folium import st_folium
-import folium
 
 st.set_page_config(
     page_title="AviData · Gestión avícola",
@@ -335,6 +333,19 @@ def obtener_saldos_lotes():
         }
     return saldos
 
+
+def mostrar_mapa_granjas(granjas):
+    """Render farm locations with Streamlit's built-in map (no custom component)."""
+    puntos = [
+        {"lat": granja["latitud"], "lon": granja["longitud"], "granja": granja["nombre"]}
+        for granja in (granjas or [])
+        if granja.get("latitud") is not None and granja.get("longitud") is not None
+    ]
+    if puntos:
+        st.map(pd.DataFrame(puntos), zoom=6, use_container_width=True)
+    else:
+        st.info("Aún no hay coordenadas de granjas para mostrar en el mapa.")
+
 # ---------------------------------------------------------
 # PERFIL Y ADMINISTRACIÓN DE ORGANIZACIÓN
 # ---------------------------------------------------------
@@ -470,19 +481,7 @@ elif opcion == "📊 Overview General":
         
     st.markdown("---")
     st.subheader("Ubicación Geográfica de Granjas")
-    if res_granjas.data:
-        m_general = folium.Map(location=[4.4065, -75.2265], zoom_start=6)
-        for g in res_granjas.data:
-            if g.get("latitud") and g.get("longitud"):
-                folium.Marker(
-                    location=[g["latitud"], g["longitud"]],
-                    popup=g["nombre"],
-                    tooltip=g["nombre"],
-                    icon=folium.Icon(color="green", icon="home")
-                ).add_to(m_general)
-        st_folium(m_general, height=350, width=800)
-    else:
-        st.info("Aún no hay granjas registradas.")
+    mostrar_mapa_granjas(res_granjas.data)
 
 # ---------------------------------------------------------
 # 1. GESTIÓN DE GRANJAS
@@ -540,39 +539,27 @@ elif opcion == "1. Granjas":
             st.dataframe(pd.DataFrame(filas_granjas), use_container_width=True)
             
             st.subheader("Mapa de Granjas Registradas")
-            m_granjas = folium.Map(location=[4.4065, -75.2265], zoom_start=6)
-            for g in res_granjas.data:
-                if g.get("latitud") and g.get("longitud"):
-                    folium.Marker(
-                        location=[g["latitud"], g["longitud"]],
-                        popup=g["nombre"],
-                        tooltip=g["nombre"],
-                        icon=folium.Icon(color="blue", icon="home")
-                    ).add_to(m_granjas)
-            st_folium(m_granjas, height=350, width=800)
+            mostrar_mapa_granjas(res_granjas.data)
         else:
             st.info("No hay granjas registradas.")
     else:
         st.subheader("Registrar Nueva Granja")
-        m = folium.Map(location=[4.4065, -75.2265], zoom_start=6)
-        m.add_child(folium.LatLngPopup())
-        map_data = st_folium(m, height=350, width=700)
-        
-        lat, lng = None, None
-        if map_data and map_data.get("last_clicked"):
-            lat = map_data["last_clicked"]["lat"]
-            lng = map_data["last_clicked"]["lng"]
-            st.success(f"Coordenadas seleccionadas: Lat {lat:.4f}, Lng {lng:.4f}")
-
         with st.form("form_granja", clear_on_submit=True):
             nombre = st.text_input("Nombre de la Granja", value="")
+            col_lat, col_lng = st.columns(2)
+            with col_lat:
+                lat = st.number_input("Latitud", min_value=-90.0, max_value=90.0, value=4.4065, format="%.6f")
+            with col_lng:
+                lng = st.number_input("Longitud", min_value=-180.0, max_value=180.0, value=-75.2265, format="%.6f")
             submitted = st.form_submit_button("Guardar Granja")
             if submitted:
-                if nombre and lat is not None:
+                if nombre.strip():
                     supabase.table("granjas").insert({"organization_id": memberships[0]["organization_id"], "nombre": nombre, "latitud": lat, "longitud": lng}).execute()
                     st.success("¡Granja guardada con éxito!")
                     st.session_state["ver_formulario_granja"] = False
                     st.rerun()
+                else:
+                    st.error("Ingresa el nombre de la granja.")
 
 # ---------------------------------------------------------
 # 2. GESTIÓN DE GALPONES (SELECCIÓN Y EDICIÓN)
