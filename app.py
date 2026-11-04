@@ -335,14 +335,61 @@ def obtener_saldos_lotes():
 
 
 def mostrar_mapa_granjas(granjas):
-    """Render farm locations with Streamlit's built-in map (no custom component)."""
+    """Render farm coordinates as a static SVG to avoid fragile browser map modules."""
     puntos = [
-        {"lat": granja["latitud"], "lon": granja["longitud"], "granja": granja["nombre"]}
+        {"lat": float(granja["latitud"]), "lon": float(granja["longitud"]), "granja": granja["nombre"]}
         for granja in (granjas or [])
         if granja.get("latitud") is not None and granja.get("longitud") is not None
     ]
     if puntos:
-        st.map(pd.DataFrame(puntos), zoom=6, use_container_width=True)
+        width, height = 960, 420
+        margin_x, margin_y = 76, 42
+        min_lon = min(p["lon"] for p in puntos)
+        max_lon = max(p["lon"] for p in puntos)
+        min_lat = min(p["lat"] for p in puntos)
+        max_lat = max(p["lat"] for p in puntos)
+        lon_span = max(max_lon - min_lon, 0.2)
+        lat_span = max(max_lat - min_lat, 0.2)
+        min_lon -= lon_span * 0.16
+        max_lon += lon_span * 0.16
+        min_lat -= lat_span * 0.18
+        max_lat += lat_span * 0.18
+
+        def project(lon, lat):
+            x = margin_x + (lon - min_lon) / (max_lon - min_lon) * (width - 2 * margin_x)
+            y = height - margin_y - (lat - min_lat) / (max_lat - min_lat) * (height - 2 * margin_y)
+            return x, y
+
+        grid = []
+        for index in range(5):
+            x = margin_x + index * (width - 2 * margin_x) / 4
+            lon = min_lon + index * (max_lon - min_lon) / 4
+            y = margin_y + index * (height - 2 * margin_y) / 4
+            lat = max_lat - index * (max_lat - min_lat) / 4
+            grid.append(f'<line x1="{x:.1f}" y1="{margin_y}" x2="{x:.1f}" y2="{height-margin_y}" stroke="#dce8e1"/>')
+            grid.append(f'<line x1="{margin_x}" y1="{y:.1f}" x2="{width-margin_x}" y2="{y:.1f}" stroke="#dce8e1"/>')
+            grid.append(f'<text x="{x:.1f}" y="{height-12}" text-anchor="middle" fill="#6b8076" font-size="12">{lon:.2f}° O</text>')
+            grid.append(f'<text x="{margin_x-12}" y="{y+4:.1f}" text-anchor="end" fill="#6b8076" font-size="12">{lat:.2f}° N</text>')
+
+        markers = []
+        for punto in puntos:
+            x, y = project(punto["lon"], punto["lat"])
+            name = escape(str(punto["granja"]))
+            markers.append(
+                f'<g><circle cx="{x:.1f}" cy="{y:.1f}" r="13" fill="#237a57" opacity=".18"/>'
+                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6" fill="#176447" stroke="white" stroke-width="2">'
+                f'<title>{name} · {punto["lat"]:.4f}, {punto["lon"]:.4f}</title></circle>'
+                f'<text x="{x+11:.1f}" y="{y-10:.1f}" fill="#214b3b" font-size="13" font-weight="600">{name}</text></g>'
+            )
+        svg = (
+            f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Ubicación de granjas en la región Andina de Colombia" '
+            'style="width:100%;height:auto;border:1px solid #dce8e1;border-radius:18px;background:linear-gradient(145deg,#f5faf6,#eaf3ed);">'
+            + ''.join(grid)
+            + f'<text x="{width/2}" y="25" text-anchor="middle" fill="#214b3b" font-size="15" font-weight="700">Colombia · Región Andina</text>'
+            + ''.join(markers)
+            + '</svg>'
+        )
+        st.markdown(svg, unsafe_allow_html=True)
     else:
         st.info("Aún no hay coordenadas de granjas para mostrar en el mapa.")
 
