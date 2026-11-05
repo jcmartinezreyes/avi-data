@@ -3,7 +3,9 @@ import json
 from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
 from html import escape
+import folium
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 from supabase import create_client
 
@@ -335,63 +337,30 @@ def obtener_saldos_lotes():
 
 
 def mostrar_mapa_granjas(granjas):
-    """Render farm coordinates as a static SVG to avoid fragile browser map modules."""
-    puntos = [
-        {"lat": float(granja["latitud"]), "lon": float(granja["longitud"]), "granja": granja["nombre"]}
-        for granja in (granjas or [])
-        if granja.get("latitud") is not None and granja.get("longitud") is not None
-    ]
-    if puntos:
-        width, height = 960, 420
-        margin_x, margin_y = 76, 42
-        min_lon = min(p["lon"] for p in puntos)
-        max_lon = max(p["lon"] for p in puntos)
-        min_lat = min(p["lat"] for p in puntos)
-        max_lat = max(p["lat"] for p in puntos)
-        lon_span = max(max_lon - min_lon, 0.2)
-        lat_span = max(max_lat - min_lat, 0.2)
-        min_lon -= lon_span * 0.16
-        max_lon += lon_span * 0.16
-        min_lat -= lat_span * 0.18
-        max_lat += lat_span * 0.18
+    puntos = []
+    for granja in granjas or []:
+        try:
+            latitud = float(granja.get("latitud"))
+            longitud = float(granja.get("longitud"))
+        except (TypeError, ValueError):
+            continue
+        if -90 <= latitud <= 90 and -180 <= longitud <= 180:
+            puntos.append(([latitud, longitud], escape(str(granja["nombre"])).replace("`", "&#96;").replace("$", "&#36;")))
 
-        def project(lon, lat):
-            x = margin_x + (lon - min_lon) / (max_lon - min_lon) * (width - 2 * margin_x)
-            y = height - margin_y - (lat - min_lat) / (max_lat - min_lat) * (height - 2 * margin_y)
-            return x, y
-
-        grid = []
-        for index in range(5):
-            x = margin_x + index * (width - 2 * margin_x) / 4
-            lon = min_lon + index * (max_lon - min_lon) / 4
-            y = margin_y + index * (height - 2 * margin_y) / 4
-            lat = max_lat - index * (max_lat - min_lat) / 4
-            grid.append(f'<line x1="{x:.1f}" y1="{margin_y}" x2="{x:.1f}" y2="{height-margin_y}" stroke="#dce8e1"/>')
-            grid.append(f'<line x1="{margin_x}" y1="{y:.1f}" x2="{width-margin_x}" y2="{y:.1f}" stroke="#dce8e1"/>')
-            grid.append(f'<text x="{x:.1f}" y="{height-12}" text-anchor="middle" fill="#6b8076" font-size="12">{lon:.2f}° O</text>')
-            grid.append(f'<text x="{margin_x-12}" y="{y+4:.1f}" text-anchor="end" fill="#6b8076" font-size="12">{lat:.2f}° N</text>')
-
-        markers = []
-        for punto in puntos:
-            x, y = project(punto["lon"], punto["lat"])
-            name = escape(str(punto["granja"]))
-            markers.append(
-                f'<g><circle cx="{x:.1f}" cy="{y:.1f}" r="13" fill="#237a57" opacity=".18"/>'
-                f'<circle cx="{x:.1f}" cy="{y:.1f}" r="6" fill="#176447" stroke="white" stroke-width="2">'
-                f'<title>{name} · {punto["lat"]:.4f}, {punto["lon"]:.4f}</title></circle>'
-                f'<text x="{x+11:.1f}" y="{y-10:.1f}" fill="#214b3b" font-size="13" font-weight="600">{name}</text></g>'
-            )
-        svg = (
-            f'<svg viewBox="0 0 {width} {height}" role="img" aria-label="Ubicación de granjas en la región Andina de Colombia" '
-            'style="width:100%;height:auto;border:1px solid #dce8e1;border-radius:18px;background:linear-gradient(145deg,#f5faf6,#eaf3ed);">'
-            + ''.join(grid)
-            + f'<text x="{width/2}" y="25" text-anchor="middle" fill="#214b3b" font-size="15" font-weight="700">Colombia · Región Andina</text>'
-            + ''.join(markers)
-            + '</svg>'
-        )
-        st.markdown(svg, unsafe_allow_html=True)
-    else:
+    if not puntos:
         st.info("Aún no hay coordenadas de granjas para mostrar en el mapa.")
+        return
+
+    mapa = folium.Map(location=puntos[0][0], zoom_start=12, tiles="CartoDB Positron",
+                      control_scale=True, scrollWheelZoom=False)
+    for coordenadas, nombre in puntos:
+        folium.CircleMarker(coordenadas, radius=8, color="#ffffff", weight=2,
+                            fill=True, fill_color="#176447", fill_opacity=1,
+                            tooltip=nombre).add_to(mapa)
+    if len(puntos) > 1:
+        mapa.fit_bounds([coordenadas for coordenadas, _ in puntos], padding=(30, 30), max_zoom=12)
+    components.html(mapa.get_root().render(), height=460)
+
 
 # ---------------------------------------------------------
 # PERFIL Y ADMINISTRACIÓN DE ORGANIZACIÓN
@@ -583,7 +552,7 @@ elif opcion == "1. Granjas":
                     "Coordenadas": f"{g.get('latitud', 'N/A')}, {g.get('longitud', 'N/A')}"
                 })
                 
-            st.dataframe(pd.DataFrame(filas_granjas), use_container_width=True)
+            st.table(pd.DataFrame(filas_granjas).set_index("Nombre Granja"))
             
             st.subheader("Mapa de Granjas Registradas")
             mostrar_mapa_granjas(res_granjas.data)
