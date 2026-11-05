@@ -1,5 +1,8 @@
 import os
 import json
+from secrets import token_urlsafe
+from threading import Lock
+from time import monotonic
 from urllib import request as urllib_request
 from urllib.error import HTTPError, URLError
 from html import escape
@@ -7,7 +10,7 @@ import folium
 import streamlit as st
 import streamlit.components.v1 as components
 import pandas as pd
-from supabase import create_client
+from supabase import ClientOptions, create_client
 
 st.set_page_config(
     page_title="AviData · Gestión avícola",
@@ -103,10 +106,98 @@ st.markdown(
 
 URL = os.getenv("SUPABASE_URL", "https://zmpqrcqadrxevqyshvak.supabase.co")
 KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "sb_publishable_--thXNjoDX0MmxrcOBFCLg_Lo5hHeCG")
-supabase = create_client(URL, KEY)
+supabase = create_client(
+    URL, KEY, options=ClientOptions(auto_refresh_token=False, persist_session=False)
+)
+
+# Only a random identifier goes to the browser. Supabase tokens stay on the server.
+@st.cache_resource
+def browser_sessions():
+    return {}, Lock()
+
+
+sessions, sessions_lock = browser_sessions()
+session_lifetime = 12 * 60 * 60
+remember_session = st.components.v2.component(
+    "avidata_browser_session",
+    html="<span hidden></span>",
+    js="""
+    export default ({ data, setStateValue }) => {
+        const key = "avidata.browser-session.v1";
+        let handle = "";
+        try {
+            if (data.clear && localStorage.getItem(key) === data.clear) {
+                localStorage.removeItem(key);
+            }
+            if (data.save) localStorage.setItem(key, data.save);
+            handle = localStorage.getItem(key) || "";
+        } catch (_) {
+            // Storage may be disabled. The current Streamlit connection can still sign in.
+        }
+        setStateValue("handle", handle);
+    };
+    """,
+)
+
+session_handle = st.session_state.get("avi_session_handle")
+browser = remember_session(
+    key="avi_browser_session",
+    data={
+        "save": st.session_state.pop("avi_save_handle", None),
+        "clear": st.session_state.pop("avi_clear_handle", None),
+    },
+    on_handle_change=lambda: None,
+)
+if session_handle is None and isinstance(browser.handle, str) and len(browser.handle) == 43:
+    session_handle = browser.handle
+    with sessions_lock:
+        if session_handle in sessions:
+            st.session_state["avi_session_handle"] = session_handle
+
+
+def clear_browser_session():
+    with sessions_lock:
+        sessions.pop(st.session_state.get("avi_session_handle"), None)
+    st.session_state["avi_clear_handle"] = st.session_state.get("avi_session_handle")
+    st.session_state["avi_session_handle"] = ""
+
+
+def sign_out():
+    clear_browser_session()
+    try:
+        supabase.auth.sign_out()
+    finally:
+        st.rerun()
+
+
+active_session = None
+with sessions_lock:
+    now = monotonic()
+    for handle, (deadline, _) in list(sessions.items()):
+        if deadline <= now:
+            del sessions[handle]
+    saved = sessions.get(session_handle)
+    if saved:
+        deadline, saved_session = saved
+        try:
+            active_session = supabase.auth.set_session(
+                saved_session.access_token, saved_session.refresh_token
+            ).session
+            if active_session:
+                sessions[session_handle] = (deadline, active_session)
+        except Exception:
+            # A temporary Auth error should not discard the browser's session.
+            st.error("No se pudo comprobar la sesión. Intenta de nuevo.")
+            if st.button("Volver a iniciar sesión"):
+                del sessions[session_handle]
+                st.session_state["avi_clear_handle"] = session_handle
+                st.session_state["avi_session_handle"] = ""
+                st.rerun()
+            st.stop()
+
 
 # La base aplica RLS por usuario autenticado y organización.
-if "avi_auth_tokens" not in st.session_state:
+if active_session is None:
     st.markdown(
         '<div class="avi-hero"><div><p class="eyebrow">Gestión avícola</p><h1>AviData</h1>'
         '<p class="description">Datos claros para decisiones más precisas en tu producción.</p></div>'
@@ -120,30 +211,15 @@ if "avi_auth_tokens" not in st.session_state:
     if login:
         try:
             auth = supabase.auth.sign_in_with_password({"email": email, "password": password})
-            st.session_state["avi_auth_tokens"] = {
-                "access_token": auth.session.access_token,
-                "refresh_token": auth.session.refresh_token,
-            }
+            handle = token_urlsafe(32)
+            with sessions_lock:
+                sessions[handle] = (monotonic() + session_lifetime, auth.session)
+            st.session_state["avi_session_handle"] = handle
+            st.session_state["avi_save_handle"] = handle
             st.rerun()
         except Exception:
             st.error("No se pudo iniciar sesión. Verifica tus credenciales o solicita acceso al administrador.")
     st.stop()
-
-try:
-    supabase.auth.set_session(
-        st.session_state["avi_auth_tokens"]["access_token"],
-        st.session_state["avi_auth_tokens"]["refresh_token"],
-    )
-    active_session = supabase.auth.get_session()
-    if active_session and active_session.access_token:
-        st.session_state["avi_auth_tokens"] = {
-            "access_token": active_session.access_token,
-            "refresh_token": active_session.refresh_token,
-        }
-except Exception:
-    st.session_state.pop("avi_auth_tokens", None)
-    st.warning("La sesión expiró. Inicia sesión de nuevo.")
-    st.rerun()
 
 membership_result = supabase.table("organization_memberships").select(
     "organization_id, role, organizations(name)"
@@ -162,9 +238,7 @@ if not memberships:
         except Exception:
             st.error("No se pudo crear la organización. Si ya perteneces a otra, solicita al administrador que te agregue.")
     if st.button("Cerrar sesión"):
-        supabase.auth.sign_out()
-        st.session_state.pop("avi_auth_tokens", None)
-        st.rerun()
+        sign_out()
     st.stop()
 
 active_user_result = supabase.auth.get_user()
@@ -187,7 +261,7 @@ def call_user_admin(payload):
         f"{URL}/functions/v1/manage-organization-users",
         data=body,
         headers={
-            "Authorization": "Bearer " + st.session_state["avi_auth_tokens"]["access_token"],
+            "Authorization": "Bearer " + active_session.access_token,
             "apikey": KEY,
             "Content-Type": "application/json",
         },
@@ -233,9 +307,7 @@ if plan_result.data:
         incubator = "incluida" if plan["incubadora_incluida"] else "no incluida"
         st.sidebar.caption(f"Plan {plan['name']} · {limit} galpones · incubadora {incubator}")
 if st.sidebar.button("Cerrar sesión", use_container_width=True):
-    supabase.auth.sign_out()
-    st.session_state.pop("avi_auth_tokens", None)
-    st.rerun()
+    sign_out()
 
 
 if "opcion_nav" not in st.session_state:
@@ -345,7 +417,7 @@ def mostrar_mapa_granjas(granjas):
         except (TypeError, ValueError):
             continue
         if -90 <= latitud <= 90 and -180 <= longitud <= 180:
-            puntos.append(([latitud, longitud], escape(str(granja["nombre"])).replace("`", "&#96;").replace("$", "&#36;")))
+            puntos.append(([latitud, longitud], escape(str(granja["nombre"])).replace(chr(92), "&#92;").replace("`", "&#96;").replace("$", "&#36;")))
 
     if not puntos:
         st.info("Aún no hay coordenadas de granjas para mostrar en el mapa.")
