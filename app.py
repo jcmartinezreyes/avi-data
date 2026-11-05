@@ -624,7 +624,8 @@ elif opcion == "1. Granjas":
                     "Coordenadas": f"{g.get('latitud', 'N/A')}, {g.get('longitud', 'N/A')}"
                 })
                 
-            st.table(pd.DataFrame(filas_granjas).set_index("Nombre Granja"))
+            tabla_granjas = pd.DataFrame(filas_granjas).to_html(index=False, escape=True)
+            st.markdown(tabla_granjas, unsafe_allow_html=True)
             
             st.subheader("Mapa de Granjas Registradas")
             mostrar_mapa_granjas(res_granjas.data)
