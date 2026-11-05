@@ -423,7 +423,7 @@ def mostrar_mapa_granjas(granjas):
         st.info("Aún no hay coordenadas de granjas para mostrar en el mapa.")
         return
 
-    mapa = folium.Map(location=puntos[0][0], zoom_start=12, tiles="CartoDB Positron",
+    mapa = folium.Map(location=puntos[0][0], zoom_start=12, tiles="OpenStreetMap",
                       control_scale=True, scrollWheelZoom=False)
     for coordenadas, nombre in puntos:
         folium.CircleMarker(coordenadas, radius=8, color="#ffffff", weight=2,
