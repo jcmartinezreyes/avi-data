@@ -1,5 +1,7 @@
 import os
 import json
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from secrets import token_urlsafe
 from threading import Lock
 from time import monotonic
@@ -23,54 +25,52 @@ st.markdown(
     """
     <style>
     :root {
-      --avi-forest: #173d32;
-      --avi-green: #27745a;
-      --avi-mint: #e7f2eb;
-      --avi-ink: #1e2b25;
-      --avi-muted: #64736b;
-      --avi-line: #e2e9e3;
-      --avi-paper: #ffffff;
-      --avi-bg: #f4f7f4;
+      --avi-forest: #174EA6;
+      --avi-green: #0B57D0;
+      --avi-mint: #DDEAFF;
+      --avi-ink: #1F2937;
+      --avi-muted: #46566C;
+      --avi-line: #D8E2F0;
+      --avi-paper: #FFFFFF;
+      --avi-bg: #F8FAFD;
     }
     .stApp { background: var(--avi-bg); color: var(--avi-ink); }
-    [data-testid="stHeader"] { background: transparent; }
-    [data-testid="stSidebar"] {
-      background: linear-gradient(180deg, #123328 0%, #1b493a 100%);
-      border-right: 1px solid rgba(255,255,255,.08);
+    [data-testid="stHeader"] { background: var(--avi-bg); }
+    [data-testid="stSidebar"] { background: #EDF3FC; border-right: 1px solid var(--avi-line); }
+    [data-testid="stSidebar"] .stButton > button { border-radius: 20px; background: #F8FAFD; }
+    [data-testid="stSidebar"] .stButton > button:hover { background: #DDEAFF; }
+    [data-testid="stAppViewContainer"] [data-baseweb="input"],
+    [data-testid="stAppViewContainer"] [data-baseweb="select"] > div {
+      background-color: #EDF3FC; color: #1F2937;
     }
-    [data-testid="stSidebar"] * { color: #edf5ef; }
-    [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p { color: #bfd2c6; }
-    [data-testid="stSidebar"] [data-testid="stRadio"] label { color: #e8f1eb; }
-    [data-testid="stSidebar"] [data-testid="stRadio"] > div { gap: .35rem; }
-    [data-testid="stSidebar"] [data-testid="stRadio"] label div[role="radio"] {
-      border-radius: 10px;
+    [data-testid="stAppViewContainer"] input { color: #1F2937; -webkit-text-fill-color: #1F2937; }
+    .avi-scroll-table {
+      height: 320px; overflow: auto; border: 1px solid var(--avi-line);
+      border-radius: 16px; background: var(--avi-paper);
     }
-    [data-testid="stSidebar"] .stButton > button {
-      border: 1px solid rgba(255,255,255,.17);
-      border-radius: 10px;
-      background: rgba(255,255,255,.08);
-      color: #f5faf6;
+    .avi-scroll-table table { margin: 0; width: 100%; border-collapse: separate; border-spacing: 0; }
+    .avi-scroll-table th, .avi-scroll-table td {
+      padding: .65rem .85rem; border: 0; border-bottom: 1px solid var(--avi-line); text-align: left;
     }
-    [data-testid="stSidebar"] .stButton > button:hover {
-      border-color: #a6d4b4; background: rgba(255,255,255,.14);
-    }
+    .avi-scroll-table thead th { position: sticky; top: 0; background: #EDF3FC; z-index: 1; }
+    .avi-scroll-table tbody tr:nth-child(even) { background: #F8FAFD; }
     .block-container { padding-top: 2.1rem; padding-bottom: 3rem; max-width: 1500px; }
     h1, h2, h3 { color: var(--avi-ink); letter-spacing: -.025em; }
     h1 { font-size: clamp(1.8rem, 3vw, 2.5rem) !important; font-weight: 700 !important; }
     h2 { font-size: 1.45rem !important; font-weight: 650 !important; }
-    .avi-brand { font-size: 1.18rem; font-weight: 750; letter-spacing: .02em; color: #fff; }
-    .avi-brand small { display:block; margin-top:.15rem; color:#b9d4c4; font-size:.72rem; font-weight:500; letter-spacing:.08em; text-transform:uppercase; }
+    .avi-brand { font-size: 1.18rem; font-weight: 750; letter-spacing: .02em; color: var(--avi-ink); }
+    .avi-brand small { display:block; margin-top:.15rem; color:var(--avi-muted); font-size:.72rem; font-weight:500; letter-spacing:.08em; text-transform:uppercase; }
     .avi-side-card {
-      margin:.6rem 0 .8rem; padding:.85rem .9rem; border:1px solid rgba(255,255,255,.15);
-      border-radius:14px; background:rgba(255,255,255,.07);
+      margin:.6rem 0 .8rem; padding:.85rem .9rem; border:1px solid var(--avi-line);
+      border-radius:14px; background:var(--avi-paper);
     }
-    .avi-side-card .label { color:#b9d4c4; font-size:.68rem; text-transform:uppercase; letter-spacing:.09em; }
-    .avi-side-card .value { color:#fff; font-size:.94rem; font-weight:650; margin-top:.2rem; }
-    .avi-side-card .subvalue { color:#cfdfd4; font-size:.78rem; margin-top:.14rem; }
+    .avi-side-card .label { color:var(--avi-muted); font-size:.68rem; text-transform:uppercase; letter-spacing:.09em; }
+    .avi-side-card .value { color:var(--avi-ink); font-size:.94rem; font-weight:650; margin-top:.2rem; }
+    .avi-side-card .subvalue { color:var(--avi-muted); font-size:.78rem; margin-top:.14rem; }
     .avi-hero {
       display:flex; justify-content:space-between; align-items:flex-end; gap:1rem;
       margin:0 0 1.5rem; padding:1.35rem 1.55rem; border:1px solid var(--avi-line);
-      border-radius:20px; background:linear-gradient(115deg,#fff 0%,#f7fbf7 65%,#e7f2eb 100%);
+      border-radius:20px; background:linear-gradient(115deg,#fff 0%,#F4F8FF 65%,#E3EEFF 100%);
       box-shadow:0 8px 28px rgba(30,55,41,.045);
     }
     .avi-hero .eyebrow { margin:0 0 .35rem; color:var(--avi-green); font-size:.72rem; font-weight:700; letter-spacing:.1em; text-transform:uppercase; }
@@ -94,7 +94,7 @@ st.markdown(
     [data-testid="stForm"] { padding:1.1rem; border:1px solid var(--avi-line); border-radius:16px; background:#fff; }
     [data-testid="stTextInput"] input, [data-testid="stNumberInput"] input, [data-testid="stDateInput"] input,
     [data-testid="stSelectbox"] [data-baseweb="select"] > div { border-radius:10px; }
-    .avi-section-label { margin:.6rem 0 .25rem; color:#a9c6b4; font-size:.67rem; font-weight:700; letter-spacing:.11em; text-transform:uppercase; }
+    .avi-section-label { margin:.6rem 0 .25rem; color:var(--avi-muted); font-size:.67rem; font-weight:700; letter-spacing:.11em; text-transform:uppercase; }
     @media (max-width: 760px) {
       .block-container { padding:1.1rem .9rem 2rem; }
       .avi-hero { align-items:flex-start; flex-direction:column; padding:1.1rem; }
@@ -313,7 +313,7 @@ if st.sidebar.button("Cerrar sesión", use_container_width=True):
 if "opcion_nav" not in st.session_state:
     st.session_state["opcion_nav"] = "📊 Overview General"
 
-if st.sidebar.button("Inicio · Overview", use_container_width=True):
+if st.sidebar.button("Inicio", use_container_width=True):
     st.session_state["opcion_nav"] = "📊 Overview General"
 
 with st.sidebar.expander("📝 Registros / Operación", expanded=True):
@@ -343,7 +343,7 @@ with st.sidebar.expander("Cuenta y organización", expanded=False):
 opcion = st.session_state["opcion_nav"]
 
 page_meta = {
-    "📊 Overview General": ("Inicio", "Vista general", "Un resumen de tus granjas, lotes y aves activas."),
+    "📊 Overview General": ("Inicio", "Vista general", "Producción en curso, registros recientes y próximos lotes a revisar."),
     "1. Granjas": ("Operación", "Granjas", "Ubicaciones y datos principales de tus granjas."),
     "2. Galpones": ("Operación", "Galpones", "Capacidad e infraestructura de producción."),
     "3. Lotes": ("Producción", "Lotes", "Alojamiento, genética y distribución de aves."),
@@ -362,50 +362,145 @@ if opcion in page_meta:
 # ---------------------------------------------------------
 # HELPER: SALDOS DE AVES Y BOXES POR LOTE
 # ---------------------------------------------------------
-def obtener_saldos_lotes():
-    res_lotes = supabase.table("lotes").select("*, galpones(id, nombre, capacidad, granjas(id, nombre))").eq("activo", True).execute()
-    res_diarios = supabase.table("registros_diarios").select(
-        "id, lote_id, mortalidad_hembra, mortalidad_macho, descarte_hembra, descarte_macho"
-    ).execute()
-    res_box = supabase.table("registros_diarios_box").select(
-        "registro_diario_id, mortalidad_hembra, mortalidad_macho, descarte_hembra, descarte_macho, registros_diarios(lote_id)"
-    ).execute()
+def consulta_lotes_organizacion():
+    return supabase.table("lotes").select(
+        "*,galpones!inner(id,nombre,capacidad,granjas!inner(id,nombre,organization_id))"
+    ).eq("galpones.granjas.organization_id", organization_id)
+
+
+def listar_filas(crear_consulta):
+    """Read all matching rows despite the API's per-request row limit."""
+    filas = []
+    pagina = 500
+    while True:
+        inicio = len(filas)
+        lote = crear_consulta().order("id").range(inicio, inicio + pagina - 1).execute().data or []
+        filas.extend(lote)
+        if len(lote) < pagina:
+            return filas
+
+
+CAMPOS_DIARIOS = (
+    "mortalidad_hembra", "mortalidad_macho", "descarte_hembra", "descarte_macho",
+    "consumo_alimento_kg", "consumo_agua_litros",
+)
+CAMPOS_PESO = ("peso_promedio_hembra_g", "peso_promedio_macho_g")
+
+
+def obtener_diarios(lotes_ids, desde=None):
+    if not lotes_ids:
+        return []
+    diarios = []
+    # Keep the URL size bounded when an organization has many lots.
+    for inicio in range(0, len(lotes_ids), 100):
+        ids = lotes_ids[inicio:inicio + 100]
+
+        def consulta():
+            query = supabase.table("registros_diarios").select(
+                "id,lote_id,fecha,dia_vida,descartes,peso_promedio_mixto_g,"
+                + ",".join(CAMPOS_DIARIOS + CAMPOS_PESO)
+                + ",registros_diarios_box(" + ",".join(CAMPOS_DIARIOS + CAMPOS_PESO) + ")"
+            ).in_("lote_id", ids)
+            return query.gte("fecha", str(desde)) if desde else query
+
+        diarios.extend(listar_filas(consulta))
+
+    for fila in diarios:
+        boxes = fila.pop("registros_diarios_box", None)
+        if boxes:
+            for campo in CAMPOS_DIARIOS:
+                fila[campo] = sum(box.get(campo) or 0 for box in boxes)
+            for campo in CAMPOS_PESO:
+                pesos = [box[campo] for box in boxes if (box.get(campo) or 0) > 0]
+                fila[campo] = sum(pesos) / len(pesos) if pesos else None
+        pesos = [fila[campo] for campo in CAMPOS_PESO if (fila.get(campo) or 0) > 0]
+        if boxes or not fila.get("peso_promedio_mixto_g"):
+            fila["peso_promedio_mixto_g"] = sum(pesos) / len(pesos) if pesos else None
+        fila["mortalidad"] = sum(fila.get(campo) or 0 for campo in CAMPOS_DIARIOS[:2])
+        descartes = sum(fila.get(campo) or 0 for campo in CAMPOS_DIARIOS[2:4])
+        fila["bajas"] = fila["mortalidad"] + (descartes if boxes else descartes or fila.get("descartes") or 0)
+    return diarios
+
+
+def obtener_saldos_lotes(lotes=None, diarios=None):
+    if lotes is None:
+        lotes = listar_filas(lambda: consulta_lotes_organizacion().eq("activo", True))
+    if diarios is None:
+        diarios = obtener_diarios([lote["id"] for lote in lotes])
 
     bajas_por_lote = {}
-    diarios_con_detalle = set()
-    for registro in (res_box.data or []):
-        lote_id = (registro.get("registros_diarios") or {}).get("lote_id")
-        if lote_id is None:
-            continue
-        diario_id = registro.get("registro_diario_id")
-        diarios_con_detalle.add(diario_id)
-        bajas = bajas_por_lote.setdefault(lote_id, {"bajas_h": 0, "bajas_m": 0})
-        bajas["bajas_h"] += (registro.get("mortalidad_hembra") or 0) + (registro.get("descarte_hembra") or 0)
-        bajas["bajas_m"] += (registro.get("mortalidad_macho") or 0) + (registro.get("descarte_macho") or 0)
-
-    # Compatibilidad con registros históricos que solo tenían totales del lote.
-    for registro in (res_diarios.data or []):
-        if registro["id"] in diarios_con_detalle:
-            continue
-        bajas = bajas_por_lote.setdefault(registro["lote_id"], {"bajas_h": 0, "bajas_m": 0})
-        bajas["bajas_h"] += (registro.get("mortalidad_hembra") or 0) + (registro.get("descarte_hembra") or 0)
-        bajas["bajas_m"] += (registro.get("mortalidad_macho") or 0) + (registro.get("descarte_macho") or 0)
+    for fila in diarios:
+        bajas = bajas_por_lote.setdefault(fila["lote_id"], [0, 0, 0])
+        bajas[0] += (fila.get("mortalidad_hembra") or 0) + (fila.get("descarte_hembra") or 0)
+        bajas[1] += (fila.get("mortalidad_macho") or 0) + (fila.get("descarte_macho") or 0)
+        bajas[2] += fila["bajas"]
 
     saldos = {}
-    for lote in (res_lotes.data or []):
-        lote_id = lote["id"]
-        inicial_h = lote.get("aves_hembra", 0) or 0
-        inicial_m = lote.get("aves_macho", 0) or 0
-        bajas = bajas_por_lote.get(lote_id, {"bajas_h": 0, "bajas_m": 0})
-        saldo_h = max(0, int(inicial_h - bajas["bajas_h"]))
-        saldo_m = max(0, int(inicial_m - bajas["bajas_m"]))
-        saldos[lote_id] = {
+    for lote in lotes:
+        bajas_h, bajas_m, bajas_totales = bajas_por_lote.get(lote["id"], (0, 0, 0))
+        saldos[lote["id"]] = {
             "lote": lote,
-            "saldo_h": saldo_h,
-            "saldo_m": saldo_m,
-            "saldo_total": saldo_h + saldo_m,
+            "saldo_h": max(0, (lote.get("aves_hembra") or 0) - bajas_h),
+            "saldo_m": max(0, (lote.get("aves_macho") or 0) - bajas_m),
+            "saldo_total": max(0, (lote.get("aves_totales") or 0) - bajas_totales),
         }
     return saldos
+
+
+def mostrar_tabla(filas, etiqueta):
+    tabla = pd.DataFrame(filas).to_html(index=False, escape=True, border=0)
+    st.markdown(
+        '<div class="avi-scroll-table" tabindex="0" role="region" aria-label="'
+        + escape(etiqueta) + '">' + tabla + '</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def mostrar_lineas(series, metricas, eje_x, etiqueta_x):
+    """Render the chart inside its own frame, with no external chart scripts."""
+    from plotly import graph_objects as go
+    from plotly.subplots import make_subplots
+
+    columnas = 2
+    filas = (len(metricas) + columnas - 1) // columnas
+    fig = make_subplots(rows=filas, cols=columnas, subplot_titles=[titulo for _, titulo in metricas])
+    colores = ["#0B57D0", "#087F5B", "#A83A78", "#986100", "#6842C2", "#007D88"]
+    for i, (nombre, datos, referencia) in enumerate(series):
+        color = "#526274" if referencia else colores[i % len(colores)]
+        for j, (campo, _) in enumerate(metricas):
+            fila, columna = divmod(j, columnas)
+            y = datos[campo].astype(object).where(datos[campo].notna(), None).tolist()
+            fig.add_trace(go.Scatter(
+                x=datos[eje_x].tolist(), y=y, name=escape(nombre),
+                legendgroup=str(i), showlegend=j == 0,
+                mode="lines+markers", marker={"size": 4},
+                line={"color": color, "dash": "dash" if referencia else "solid", "width": 2.5},
+                hovertemplate="%{x}<br>%{y:,.2f}",
+            ), row=fila + 1, col=columna + 1)
+    alto = filas * 315 + 85
+    fig.update_xaxes(title_text=etiqueta_x, gridcolor="#E3EAF4")
+    fig.update_yaxes(gridcolor="#E3EAF4", rangemode="tozero")
+    fig.update_layout(
+        height=alto, template="plotly_white", margin={"l": 56, "r": 20, "t": 48, "b": 20},
+        legend={"orientation": "h", "y": -0.18}, font={"color": "#1F2937"},
+    )
+    components.html(fig.to_html(
+        full_html=False, include_plotlyjs=True, config={"displaylogo": False, "responsive": True},
+    ), height=alto + 12)
+
+
+def series_productivas(diarios, lotes):
+    df = pd.DataFrame(diarios)
+    if df.empty:
+        return df
+    df = df.dropna(subset=["dia_vida"]).sort_values(["lote_id", "dia_vida"])
+    aves = df["lote_id"].map({lote["id"]: lote.get("aves_totales") for lote in lotes}).astype(float)
+    aves = aves.where(aves > 0)
+    df["peso_promedio_mixto_g"] = df["peso_promedio_mixto_g"].where(df["peso_promedio_mixto_g"] > 0)
+    df["alimento_g_ave"] = df["consumo_alimento_kg"] * 1000 / aves
+    df["agua_ml_ave"] = df["consumo_agua_litros"] * 1000 / aves
+    df["mortalidad_pct"] = df.groupby("lote_id")["mortalidad"].cumsum() * 100 / aves
+    return df
 
 
 def mostrar_mapa_granjas(granjas):
@@ -551,25 +646,59 @@ elif opcion == "Usuarios y permisos" and current_role in ("owner", "admin"):
 # OVERVIEW GENERAL
 # ---------------------------------------------------------
 elif opcion == "📊 Overview General":
-    st.subheader("Indicadores de producción")
-    res_granjas = supabase.table("granjas").select("*").execute()
-    saldos_dict = obtener_saldos_lotes()
-    
-    cant_granjas = len(res_granjas.data) if res_granjas.data else 0
-    cant_lotes = len(saldos_dict)
-    total_saldo_aves = sum(item["saldo_total"] for item in saldos_dict.values())
+    hoy = datetime.now(ZoneInfo("America/Bogota")).date()
+    inicio_semana = hoy - timedelta(days=6)
+    lotes = listar_filas(consulta_lotes_organizacion)
+    activos = [lote for lote in lotes if lote["activo"]]
+    cerrados = [lote for lote in lotes if lote["activo"] is False]
+    diarios = obtener_diarios([lote["id"] for lote in activos])
+    saldos = obtener_saldos_lotes(activos, diarios)
+    aves_vivas = sum(item["saldo_total"] for item in saldos.values())
+    granjas = {lote["galpones"]["granjas"]["id"] for lote in activos}
+    galpones = {lote["galpones"]["id"] for lote in activos}
 
-    col_kpi1, col_kpi2, col_kpi3 = st.columns(3)
-    with col_kpi1:
-        st.metric("Granjas Registradas", cant_granjas)
-    with col_kpi2:
-        st.metric("Lotes Activos", cant_lotes)
-    with col_kpi3:
-        st.metric("Saldo Total Aves Vivas", f"{total_saldo_aves:,}")
-        
-    st.markdown("---")
-    st.subheader("Ubicación Geográfica de Granjas")
-    mostrar_mapa_granjas(res_granjas.data)
+    st.subheader("Producción en curso")
+    columnas = st.columns(4)
+    columnas[0].metric("Lotes activos", len(activos))
+    columnas[1].metric("Aves vivas estimadas", f"{aves_vivas:,}")
+    columnas[2].metric("Galpones en producción", len(galpones))
+    columnas[3].metric("Granjas en producción", len(granjas))
+    st.caption("Aves vivas estimadas = aves alojadas menos bajas registradas.")
+
+    st.subheader("Seguimiento de los últimos 7 días")
+    semana = [fila for fila in diarios if str(inicio_semana) <= fila["fecha"] <= str(hoy)]
+    columnas = st.columns(4)
+    columnas[0].metric("Mortalidad registrada", f"{sum(fila['mortalidad'] for fila in semana):,}" if semana else "—")
+    columnas[1].metric("Alimento registrado", f"{sum(fila.get('consumo_alimento_kg') or 0 for fila in semana):,.0f} kg" if semana else "—")
+    columnas[2].metric("Lotes con registros", f"{len({fila['lote_id'] for fila in semana})} / {len(activos)}")
+    columnas[3].metric("Lotes cerrados en el histórico", len(cerrados))
+
+    if semana:
+        tendencia = pd.DataFrame(semana).groupby("fecha", as_index=False)[
+            ["mortalidad", "consumo_alimento_kg"]
+        ].sum(min_count=1)
+        mostrar_lineas([("Lotes activos", tendencia, False)], [
+            ("consumo_alimento_kg", "Alimento diario registrado (kg)"),
+            ("mortalidad", "Mortalidad diaria registrada (aves)"),
+        ], "fecha", "Fecha")
+    else:
+        st.info("Aún no hay registros de lotes activos en este período.")
+
+    st.subheader("Lotes de engorde a partir de 40 días")
+    maduros = []
+    for lote in sorted(activos, key=lambda item: item["fecha_encaste"]):
+        edad = (hoy - datetime.fromisoformat(lote["fecha_encaste"]).date()).days + 1
+        if lote["tipo_produccion"] == "engorde" and edad >= 40:
+            maduros.append({
+                "Lote": lote["codigo_lote"], "Granja": lote["galpones"]["granjas"]["nombre"],
+                "Alojamiento": lote["fecha_encaste"], "Edad (días)": edad,
+                "Aves vivas estimadas": saldos[lote["id"]]["saldo_total"],
+            })
+    if maduros:
+        mostrar_tabla(maduros, "Lotes de engorde a partir de 40 días")
+        st.caption("Revisa estos lotes para planear la salida. El cierre se confirma en Lotes cuando termina el ciclo.")
+    else:
+        st.caption("Ningún lote de engorde activo ha llegado a 40 días.")
 
 # ---------------------------------------------------------
 # 1. GESTIÓN DE GRANJAS
@@ -592,14 +721,16 @@ elif opcion == "1. Granjas":
                 st.rerun()
 
     if not st.session_state["ver_formulario_granja"]:
-        res_granjas = supabase.table("granjas").select("*").execute()
-        res_galpones = supabase.table("galpones").select("*").execute()
+        granjas_registradas = listar_filas(lambda: supabase.table("granjas").select("*").eq("organization_id", organization_id))
+        galpones_registrados = listar_filas(lambda: supabase.table("galpones").select(
+            "*,granjas!inner(organization_id)"
+        ).eq("granjas.organization_id", organization_id))
         saldos_dict = obtener_saldos_lotes()
         
-        if res_granjas.data:
-            df_galpones = pd.DataFrame(res_galpones.data) if res_galpones.data else pd.DataFrame()
+        if granjas_registradas:
+            df_galpones = pd.DataFrame(galpones_registrados) if galpones_registrados else pd.DataFrame()
             filas_granjas = []
-            for g in res_granjas.data:
+            for g in granjas_registradas:
                 g_id = g["id"]
                 if not df_galpones.empty and "granja_id" in df_galpones.columns:
                     galpones_g = df_galpones[df_galpones["granja_id"] == g_id]
@@ -624,11 +755,10 @@ elif opcion == "1. Granjas":
                     "Coordenadas": f"{g.get('latitud', 'N/A')}, {g.get('longitud', 'N/A')}"
                 })
                 
-            tabla_granjas = pd.DataFrame(filas_granjas).to_html(index=False, escape=True)
-            st.markdown(tabla_granjas, unsafe_allow_html=True)
+            mostrar_tabla(filas_granjas, "Listado de granjas")
             
             st.subheader("Mapa de Granjas Registradas")
-            mostrar_mapa_granjas(res_granjas.data)
+            mostrar_mapa_granjas(granjas_registradas)
         else:
             st.info("No hay granjas registradas.")
     else:
@@ -817,58 +947,47 @@ elif opcion == "3. Lotes":
                 st.rerun()
 
     if not st.session_state["ver_formulario_lote"] and st.session_state["lote_a_editar"] is None:
-        res_lotes = supabase.table("lotes").select("*, galpones(id, nombre, granjas(id, nombre))").eq("activo", True).execute()
-        saldos_dict = obtener_saldos_lotes()
-
-        if res_lotes.data:
-            lotes_lista = res_lotes.data
-            filas_lotes = []
-            
-            for l in lotes_lista:
-                lote_id = l["id"]
-                s_info = saldos_dict.get(lote_id, {"saldo_h": 0, "saldo_m": 0, "saldo_total": 0})
-                
-                nombre_galpon = l["galpones"]["nombre"] if isinstance(l.get("galpones"), dict) else ""
-                nombre_granja = l["galpones"]["granjas"]["nombre"] if isinstance(l.get("galpones"), dict) and "granjas" in l["galpones"] else ""
-                
-                # Consultar boxes creados
-                res_boxes = supabase.table("galpon_boxes").select("id").eq("lote_id", lote_id).execute()
-                cant_boxes = len(res_boxes.data) if res_boxes.data else 0
-                
-                filas_lotes.append({
-                    "ID Internal": l["id"],
-                    "Código Lote": l["codigo_lote"],
-                    "Boxes Creados": cant_boxes,
-                    "Propósito": l.get("proposito") or "Sin Asignar",
-                    "Línea Genética": l["linea_genetica"],
-                    "Fecha Encaste": l["fecha_encaste"],
-                    "Inicial Hembras": l.get("aves_hembra", 0) or 0,
-                    "Inicial Machos": l.get("aves_macho", 0) or 0,
-                    "Saldo Actual Aves": s_info["saldo_total"],
-                    "Galpón": nombre_galpon,
-                    "Granja": nombre_granja
-                })
-                
-            df_lotes = pd.DataFrame(filas_lotes)
-            st.write("💡 Selecciona una fila para **editar los datos o reconfigurar los boxes del lote**:")
-            
-            event = st.dataframe(
-                df_lotes.drop(columns=["ID Internal"]),
-                use_container_width=True,
-                on_select="rerun",
-                selection_mode="single-row"
-            )
-            
-            selected_rows = event.selection.get("rows", [])
-            if selected_rows:
-                idx = selected_rows[0]
-                lote_id_sel = df_lotes.iloc[idx]["ID Internal"]
-                lote_obj = next((item for item in lotes_lista if item["id"] == lote_id_sel), None)
-                if lote_obj:
-                    st.session_state["lote_a_editar"] = lote_obj
-                    st.rerun()
+        estado = st.radio("Estado del lote", ["Activos", "Cerrados"], horizontal=True)
+        mostrar_activos = estado == "Activos"
+        lotes_lista = sorted(
+            listar_filas(lambda: consulta_lotes_organizacion().eq("activo", mostrar_activos)),
+            key=lambda lote: (lote["fecha_encaste"], lote["id"]), reverse=True,
+        )
+        if not lotes_lista:
+            st.info(f"No hay lotes {estado.lower()}.")
         else:
-            st.info("No hay lotes creados actualmente.")
+            saldos = obtener_saldos_lotes(lotes_lista) if mostrar_activos else {}
+            filas_lotes = []
+            for lote in lotes_lista:
+                galpon = lote["galpones"]
+                fila = {
+                    "Lote": lote["codigo_lote"], "Línea genética": lote["linea_genetica"],
+                    "Alojamiento": lote["fecha_encaste"], "Aves alojadas": lote["aves_totales"],
+                    "Galpón": galpon["nombre"], "Granja": galpon["granjas"]["nombre"],
+                }
+                if mostrar_activos:
+                    fila["Aves vivas estimadas"] = saldos[lote["id"]]["saldo_total"]
+                filas_lotes.append(fila)
+            mostrar_tabla(filas_lotes, f"Lotes {estado.lower()}")
+
+            if mostrar_activos:
+                por_id = {lote["id"]: lote for lote in lotes_lista}
+                lote_id = st.selectbox(
+                    "Seleccionar lote para gestionar", list(por_id), index=None,
+                    format_func=lambda i: f"{por_id[i]['codigo_lote']} · {por_id[i]['galpones']['granjas']['nombre']}",
+                )
+                if lote_id is not None:
+                    editar, cerrar = st.columns(2)
+                    if editar.button("Editar lote y boxes"):
+                        st.session_state["lote_a_editar"] = por_id[lote_id]
+                        st.rerun()
+                    if current_role in ("owner", "admin"):
+                        confirmado = cerrar.checkbox("Confirmo que terminó el ciclo", key=f"cerrar_{lote_id}")
+                        if cerrar.button("Cerrar lote", disabled=not confirmado):
+                            resultado = consulta_lotes_organizacion().eq("id", lote_id).eq("activo", True).execute()
+                            if resultado.data:
+                                supabase.table("lotes").update({"activo": False}).eq("id", lote_id).eq("activo", True).execute()
+                            st.rerun()
 
     else:
         lote_edit = st.session_state["lote_a_editar"]
@@ -981,7 +1100,15 @@ elif opcion == "3. Lotes":
                     
                     if es_edicion:
                         lote_id_act = lote_edit["id"]
-                        supabase.table("lotes").update(datos_lote).eq("id", lote_id_act).execute()
+                        vigente = consulta_lotes_organizacion().eq("id", lote_id_act).eq("activo", True).execute()
+                        if not vigente.data:
+                            st.error("Este lote ya está cerrado.")
+                            st.stop()
+                        cambios = {campo: valor for campo, valor in datos_lote.items() if campo != "activo"}
+                        actualizado = supabase.table("lotes").update(cambios).eq("id", lote_id_act).eq("activo", True).execute()
+                        if not actualizado.data:
+                            st.error("No se pudo guardar el lote activo.")
+                            st.stop()
                         supabase.table("galpon_boxes").delete().eq("lote_id", lote_id_act).execute()
                     else:
                         res_ins = supabase.table("lotes").insert(datos_lote).execute()
@@ -1013,16 +1140,18 @@ elif opcion == "3. Lotes":
 # ---------------------------------------------------------
 elif opcion == "4. Ingreso Diario":
     st.subheader("Registro diario por boxes y consolidado de lote")
-    res_lotes = supabase.table("lotes").select("id, codigo_lote, linea_genetica, tipo_produccion, fecha_encaste, galpones(nombre)").eq("activo", True).execute()
+    hoy = datetime.now(ZoneInfo("America/Bogota")).date()
+    lotes_activos = listar_filas(lambda: consulta_lotes_organizacion().eq("activo", True).lte("fecha_encaste", str(hoy)))
 
-    if res_lotes.data:
+    if lotes_activos:
         lotes_dict = {
-            f"{l['codigo_lote']} ({l['galpones']['nombre']} - {l['linea_genetica']})": l
-            for l in res_lotes.data
+            f"{l['codigo_lote']} · {l['galpones']['granjas']['nombre']} · {l['galpones']['nombre']}": l
+            for l in lotes_activos
         }
         lote_info = lotes_dict[st.selectbox("Seleccionar Lote Activo", list(lotes_dict.keys()))]
-        fecha_registro = st.date_input("Fecha del Registro")
         fecha_encaste = pd.to_datetime(lote_info["fecha_encaste"]).date()
+        fecha_registro = st.date_input("Fecha del registro", value=hoy, min_value=fecha_encaste, max_value=hoy)
+        captura_key = f"{lote_info['id']}_{fecha_registro}"
         dia_vida_calculado = (fecha_registro - fecha_encaste).days + 1
 
         if dia_vida_calculado < 1:
@@ -1058,22 +1187,22 @@ elif opcion == "4. Ingreso Diario":
                     with st.expander(f"📦 {b['nombre_box']}", expanded=True):
                         c1, c2, c3, c4, c5, c6 = st.columns(6)
                         with c1:
-                            mh = st.number_input("Mort. Hembra", min_value=0, value=int(prev_b.get("mortalidad_hembra", 0)), key=f"mh_{box_id}")
+                            mh = st.number_input("Mort. Hembra", min_value=0, value=int(prev_b.get("mortalidad_hembra", 0)), key=f"mh_{captura_key}_{box_id}")
                         with c2:
-                            mm = st.number_input("Mort. Macho", min_value=0, value=int(prev_b.get("mortalidad_macho", 0)), key=f"mm_{box_id}")
+                            mm = st.number_input("Mort. Macho", min_value=0, value=int(prev_b.get("mortalidad_macho", 0)), key=f"mm_{captura_key}_{box_id}")
                         with c3:
-                            dh = st.number_input("Desc. Hembra", min_value=0, value=int(prev_b.get("descarte_hembra", 0)), key=f"dh_{box_id}")
+                            dh = st.number_input("Desc. Hembra", min_value=0, value=int(prev_b.get("descarte_hembra", 0)), key=f"dh_{captura_key}_{box_id}")
                         with c4:
-                            dm = st.number_input("Desc. Macho", min_value=0, value=int(prev_b.get("descarte_macho", 0)), key=f"dm_{box_id}")
+                            dm = st.number_input("Desc. Macho", min_value=0, value=int(prev_b.get("descarte_macho", 0)), key=f"dm_{captura_key}_{box_id}")
                         with c5:
-                            ali = st.number_input("Alimento (kg)", min_value=0.0, value=float(prev_b.get("consumo_alimento_kg", 0.0)), step=5.0, key=f"ali_{box_id}")
+                            ali = st.number_input("Alimento (kg)", min_value=0.0, value=float(prev_b.get("consumo_alimento_kg", 0.0)), step=5.0, key=f"ali_{captura_key}_{box_id}")
                         with c6:
-                            agu = st.number_input("Agua (L)", min_value=0.0, value=float(prev_b.get("consumo_agua_litros", 0.0)), step=10.0, key=f"agu_{box_id}")
+                            agu = st.number_input("Agua (L)", min_value=0.0, value=float(prev_b.get("consumo_agua_litros", 0.0)), step=10.0, key=f"agu_{captura_key}_{box_id}")
                         c7, c8 = st.columns(2)
                         with c7:
-                            ph = st.number_input("Peso Prom. Hembra (g)", min_value=0.0, value=float(prev_b.get("peso_promedio_hembra_g", 0.0)), key=f"ph_{box_id}")
+                            ph = st.number_input("Peso Prom. Hembra (g)", min_value=0.0, value=float(prev_b.get("peso_promedio_hembra_g", 0.0)), key=f"ph_{captura_key}_{box_id}")
                         with c8:
-                            pm = st.number_input("Peso Prom. Macho (g)", min_value=0.0, value=float(prev_b.get("peso_promedio_macho_g", 0.0)), key=f"pm_{box_id}")
+                            pm = st.number_input("Peso Prom. Macho (g)", min_value=0.0, value=float(prev_b.get("peso_promedio_macho_g", 0.0)), key=f"pm_{captura_key}_{box_id}")
 
                         valores_metricas = []
                         for metric in metricas:
@@ -1081,7 +1210,7 @@ elif opcion == "4. Ingreso Diario":
                                 f"{metric['nombre']} ({metric['unidad']})",
                                 min_value=0.0,
                                 value=float(mediciones_previas.get((box_id, metric["codigo"]), 0)),
-                                key=f"metric_{metric['codigo']}_{box_id}",
+                                key=f"metric_{captura_key}_{metric['codigo']}_{box_id}",
                             )
                             valores_metricas.append({"codigo_metrica": metric["codigo"], "valor": value})
 
@@ -1108,6 +1237,10 @@ elif opcion == "4. Ingreso Diario":
 
                 label = "Actualizar Registro Diario" if registro_previo else "Guardar Registro Diario del Lote"
                 if st.button(label, type="primary"):
+                    vigente = consulta_lotes_organizacion().eq("id", lote_info["id"]).eq("activo", True).execute()
+                    if not vigente.data:
+                        st.error("Este lote ya está cerrado. Selecciona otro lote activo.")
+                        st.stop()
                     header = {"lote_id": lote_info["id"], "fecha": str(fecha_registro), "dia_vida": int(dia_vida_calculado)}
                     if registro_previo:
                         reg_id = registro_previo["id"]
@@ -1152,67 +1285,90 @@ elif opcion == "4. Ingreso Diario":
 # ---------------------------------------------------------
 # 5. ANÁLISIS GERENCIAL
 # ---------------------------------------------------------
-elif opcion == "📈 Análisis Gerencial":
-    st.subheader("Análisis gerencial de lotes")
-    res_diarios = supabase.table("registros_diarios").select(
-        "id, lote_id, fecha, dia_vida, mortalidad_hembra, mortalidad_macho, descarte_hembra, descarte_macho, consumo_alimento_kg, consumo_agua_litros, peso_promedio_mixto_g, peso_promedio_hembra_g, peso_promedio_macho_g, lotes(codigo_lote, linea_genetica)"
-    ).execute()
-    res_detalle = supabase.table("registros_diarios_box").select(
-        "registro_diario_id, mortalidad_hembra, mortalidad_macho, descarte_hembra, descarte_macho, consumo_alimento_kg, consumo_agua_litros, peso_promedio_hembra_g, peso_promedio_macho_g"
-    ).execute()
+elif opcion == "📈 Análisis Gerencial" and current_role in ("owner", "admin", "analyst"):
+    lotes = listar_filas(consulta_lotes_organizacion)
+    if not lotes:
+        st.info("Aún no hay lotes en esta organización.")
+        st.stop()
 
-    detalle_por_registro = {}
-    for dato in (res_detalle.data or []):
-        resumen = detalle_por_registro.setdefault(dato["registro_diario_id"], {
-            "mortalidad_hembra": 0, "mortalidad_macho": 0, "descarte_hembra": 0,
-            "descarte_macho": 0, "consumo_alimento_kg": 0.0, "consumo_agua_litros": 0.0,
-            "pesos_h": [], "pesos_m": [],
-        })
-        for campo in ("mortalidad_hembra", "mortalidad_macho", "descarte_hembra", "descarte_macho", "consumo_alimento_kg", "consumo_agua_litros"):
-            resumen[campo] += dato.get(campo) or 0
-        if dato.get("peso_promedio_hembra_g"):
-            resumen["pesos_h"].append(float(dato["peso_promedio_hembra_g"]))
-        if dato.get("peso_promedio_macho_g"):
-            resumen["pesos_m"].append(float(dato["peso_promedio_macho_g"]))
+    filtros = st.columns(2)
+    tipos = sorted({lote["tipo_produccion"] for lote in lotes})
+    tipo = filtros[0].selectbox("Tipo de producción", tipos, format_func=str.capitalize)
+    del_tipo = [lote for lote in lotes if lote["tipo_produccion"] == tipo]
+    lineas = sorted({lote.get("linea_genetica") or "Sin línea registrada" for lote in del_tipo})
+    linea = filtros[1].selectbox("Línea genética", lineas)
+    cohorte = sorted(
+        [lote for lote in del_tipo if (lote.get("linea_genetica") or "Sin línea registrada") == linea],
+        key=lambda lote: (lote["fecha_encaste"], lote["id"]), reverse=True,
+    )
+    activos = [lote for lote in cohorte if lote["activo"]]
+    historicos = [lote for lote in cohorte if lote["activo"] is False]
+    por_id = {lote["id"]: lote for lote in cohorte}
 
-    filas = []
-    for registro in (res_diarios.data or []):
-        detalle = detalle_por_registro.get(registro["id"])
-        if detalle:
-            peso_h = sum(detalle["pesos_h"]) / len(detalle["pesos_h"]) if detalle["pesos_h"] else 0
-            peso_m = sum(detalle["pesos_m"]) / len(detalle["pesos_m"]) if detalle["pesos_m"] else 0
-            peso_mix = (peso_h + peso_m) / 2 if peso_h and peso_m else (peso_h or peso_m)
-            fila = {campo: detalle[campo] for campo in (
-                "mortalidad_hembra", "mortalidad_macho", "descarte_hembra",
-                "descarte_macho", "consumo_alimento_kg", "consumo_agua_litros"
-            )}
-            fila.update({
-                "peso_promedio_hembra_g": peso_h,
-                "peso_promedio_macho_g": peso_m,
-                "peso_promedio_mixto_g": peso_mix,
-            })
+    def etiqueta_lote(lote_id):
+        lote = por_id[lote_id]
+        return f"{lote['codigo_lote']} · {lote['galpones']['granjas']['nombre']} · {lote['fecha_encaste']}"
+
+    st.subheader("Lotes en producción")
+    ids_activos = [lote["id"] for lote in activos]
+    seleccion_activos = st.multiselect(
+        "Selecciona los lotes activos que quieres comparar", ids_activos,
+        default=ids_activos[:1], format_func=etiqueta_lote,
+        max_selections=6, disabled=not ids_activos, key=f"avi_compare_active_{tipo}_{linea}",
+    )
+    if not ids_activos:
+        st.caption("No hay lotes activos para esta línea genética.")
+
+    st.subheader("Referencia de ciclos cerrados")
+    ids_historicos = [lote["id"] for lote in historicos]
+    usar_referencia = st.checkbox("Mostrar la mediana histórica por día de vida", value=True, disabled=not ids_historicos)
+    seleccion_cerrados = st.multiselect(
+        "Añade lotes cerrados individuales para comparar", ids_historicos,
+        format_func=etiqueta_lote, max_selections=6, disabled=not ids_historicos,
+        key=f"avi_compare_closed_{tipo}_{linea}",
+    )
+    if not ids_historicos:
+        st.caption("No hay ciclos cerrados para construir una referencia de esta línea.")
+
+    seleccion = seleccion_activos + seleccion_cerrados
+    incluir_referencia = usar_referencia and bool(ids_historicos)
+    consulta_ids = sorted(set(seleccion + (ids_historicos if incluir_referencia else [])))
+    datos = series_productivas(obtener_diarios(consulta_ids), cohorte)
+    if datos.empty:
+        st.info("Selecciona lotes con registros diarios para ver la comparación.")
+        st.stop()
+
+    metricas = [
+        ("peso_promedio_mixto_g", "Peso promedio (g)"),
+        ("alimento_g_ave", "Alimento diario (g/ave alojada)"),
+        ("agua_ml_ave", "Agua diaria (ml/ave alojada)"),
+        ("mortalidad_pct", "Mortalidad acumulada registrada (%)"),
+    ]
+    curvas = []
+    if incluir_referencia:
+        hist = datos[datos["lote_id"].isin(ids_historicos)]
+        if not hist.empty:
+            campos = [campo for campo, _ in metricas]
+            guia = hist.groupby("dia_vida", as_index=False)[campos].median()
+            n = hist["lote_id"].nunique()
+            curvas.append((f"Mediana histórica · {n} lotes", guia, True))
+            cobertura = hist.groupby("dia_vida")["lote_id"].nunique()
+            st.caption(
+                f"Referencia interna calculada con {n} lotes cerrados con registros. "
+                f"Hay entre {cobertura.min()} y {cobertura.max()} lotes por día de vida."
+            )
         else:
-            fila = {campo: registro.get(campo) or 0 for campo in (
-                "mortalidad_hembra", "mortalidad_macho", "descarte_hembra", "descarte_macho",
-                "consumo_alimento_kg", "consumo_agua_litros", "peso_promedio_hembra_g",
-                "peso_promedio_macho_g", "peso_promedio_mixto_g"
-            )}
-        fila.update({
-            "fecha": registro["fecha"],
-            "dia_vida": registro["dia_vida"],
-            "lote_id": registro["lote_id"],
-            "codigo_lote": (registro.get("lotes") or {}).get("codigo_lote", ""),
-            "linea_genetica": (registro.get("lotes") or {}).get("linea_genetica", ""),
-        })
-        filas.append(fila)
+            st.caption("Los lotes cerrados de esta línea aún no tienen registros para calcular la referencia.")
 
-    if filas:
-        df = pd.DataFrame(filas).sort_values(["lote_id", "dia_vida"])
-        st.subheader("Tabla Consolidada de Registros")
-        st.dataframe(df, use_container_width=True)
-        st.subheader("Evolución de Pesos Promedio")
-        st.line_chart(df, x="dia_vida", y=["peso_promedio_mixto_g", "peso_promedio_hembra_g", "peso_promedio_macho_g"], color="codigo_lote")
-        st.subheader("Consumo Diario de Alimento (kg)")
-        st.bar_chart(df, x="dia_vida", y="consumo_alimento_kg", color="codigo_lote")
-    else:
-        st.info("Aún no hay datos cargados.")
+    for lote_id in seleccion:
+        serie = datos[datos["lote_id"] == lote_id]
+        codigo = por_id[lote_id]["codigo_lote"]
+        if serie.empty:
+            st.caption(f"{codigo} aún no tiene registros diarios.")
+        else:
+            estado = "Activo" if por_id[lote_id]["activo"] else "Cerrado"
+            curvas.append((f"{codigo} · {estado}", serie, False))
+
+    if curvas:
+        mostrar_lineas(curvas, metricas, "dia_vida", "Día de vida")
+        st.caption("Los consumos se normalizan por aves alojadas. La mortalidad acumulada suma los registros disponibles.")

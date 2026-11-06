@@ -3,6 +3,10 @@
 -- Ross 308 targets; they are not real farm records or veterinary guidance.
 -- Geography: five sample farms in Colombia's Andean region.
 
+-- Fixed demonstration snapshot so a repeat run does not shift the calendar.
+begin;
+
+create temp table avi_demo_specs on commit drop as
 with
 org as (
     select id from public.organizations where name = 'Martinez_Poultry'
@@ -55,41 +59,71 @@ all_houses as (
     select hs.farm_ord, hs.house_ord, h.id, h.granja_id, h.nombre
     from house_specs hs join public.galpones h on h.granja_id = hs.granja_id and h.nombre = hs.nombre
     where not exists (select 1 from inserted_houses i where i.id = h.id)
-),
-lot_specs as (
-    select n as lot_num,
-           'DEMO-AVI-2026-' || lpad(n::text, 3, '0') as codigo_lote,
-           h.id as galpon_id,
-           case when n % 2 = 0 then 'Cobb 500' else 'Ross 308' end as linea_genetica,
-           (14 + ((n - 1) % 5) * 7)::integer as edad_dias
-    from generate_series(1, 50) n
-    join all_houses h
-      on h.farm_ord = ((n - 1) / 10) + 1
-     and h.house_ord = ((n - 1) % 10) + 1
-),
-inserted_lots as (
-    insert into public.lotes (
-      galpon_id, codigo_lote, linea_genetica, fecha_encaste,
-      aves_hembra, aves_macho, aves_totales, activo, proposito, tipo_produccion
-    )
-    select galpon_id, codigo_lote, linea_genetica, current_date - edad_dias,
-           7500, 7500, 15000, true, 'Engorde de demostracion', 'engorde'
-    from lot_specs s
-    where not exists (select 1 from public.lotes l where l.codigo_lote = s.codigo_lote)
-    returning id, codigo_lote, galpon_id, linea_genetica, fecha_encaste,
-              aves_hembra, aves_macho, aves_totales
-),
-all_demo_lots as (
-    select id, codigo_lote, galpon_id, linea_genetica, fecha_encaste,
-           aves_hembra, aves_macho, aves_totales
-    from inserted_lots
-    union all
-    select l.id, l.codigo_lote, l.galpon_id, l.linea_genetica, l.fecha_encaste,
-           l.aves_hembra, l.aves_macho, l.aves_totales
-    from public.lotes l
-    where l.codigo_lote like 'DEMO-AVI-2026-%'
-      and not exists (select 1 from inserted_lots i where i.id = l.id)
-),
+)
+select n as lot_num, 'DEMO-AVI-2026-' || lpad(n::text, 3, '0') as codigo_lote,
+       h.id as galpon_id,
+       case when n % 2 = 0 then 'Cobb 500' else 'Ross 308' end as linea_genetica,
+       case when n <= 50 then date '2026-11-05' - (150 - 2 * (n - 1))
+            else date '2026-11-05' - (5 + 5 * (n - 51)) end as fecha_encaste,
+       n > 50 as activo,
+       case when n <= 50 then 42 else 5 + 5 * (n - 51) end as dias_registrados
+from generate_series(1, 57) n
+join all_houses h
+  on h.farm_ord = case when n <= 50 then (n - 1) / 10 + 1 else (n - 51) % 5 + 1 end
+ and h.house_ord = case when n <= 50 then (n - 1) % 10 + 1 else (n - 51) / 5 + 1 end;
+
+-- Keep the original lot and daily record IDs. Only move the original demo rows.
+do $$
+begin
+    if (select count(*) from avi_demo_specs) <> 57 then
+        raise exception 'Expected exactly 57 demo lot specifications';
+    end if;
+    if exists (
+        select 1 from avi_demo_specs s join public.lotes l using (codigo_lote)
+        where l.galpon_id is distinct from s.galpon_id
+    ) or exists (
+        select 1 from avi_demo_specs s join public.lotes l using (codigo_lote)
+        where not s.activo and l.fecha_encaste <> s.fecha_encaste
+          and (exists (select 1 from public.galpon_boxes b where b.lote_id = l.id)
+            or exists (select 1 from public.registros_diarios r
+                       where r.lote_id = l.id and r.created_by is not null))
+    ) then
+        raise exception 'Demo lot data differs from the original seed';
+    end if;
+end $$;
+
+update public.registros_diarios r
+set fecha = date '1900-01-01' + r.dia_vida - 1
+from avi_demo_specs s join public.lotes l using (codigo_lote)
+where r.lote_id = l.id and not s.activo and l.fecha_encaste <> s.fecha_encaste;
+
+update public.registros_diarios r
+set fecha = s.fecha_encaste + r.dia_vida - 1
+from avi_demo_specs s join public.lotes l using (codigo_lote)
+where r.lote_id = l.id and not s.activo and l.fecha_encaste <> s.fecha_encaste;
+
+-- Stage the date change first because the old and new date ranges can overlap.
+update public.registros_diarios r
+set fecha = s.fecha_encaste + r.dia_vida - 1
+from avi_demo_specs s join public.lotes l using (codigo_lote)
+where r.lote_id = l.id and not s.activo and l.fecha_encaste <> s.fecha_encaste;
+
+update public.lotes l
+set fecha_encaste = s.fecha_encaste, activo = false
+from avi_demo_specs s
+where l.codigo_lote = s.codigo_lote and not s.activo
+  and (l.fecha_encaste is distinct from s.fecha_encaste or l.activo is distinct from false);
+
+insert into public.lotes (
+  galpon_id, codigo_lote, linea_genetica, fecha_encaste,
+  aves_hembra, aves_macho, aves_totales, activo, proposito, tipo_produccion
+)
+select galpon_id, codigo_lote, linea_genetica, fecha_encaste,
+       7500, 7500, 15000, activo, 'Engorde de demostracion', 'engorde'
+from avi_demo_specs s
+where not exists (select 1 from public.lotes l where l.codigo_lote = s.codigo_lote);
+
+with
 targets(linea_genetica, dia, peso_g, alimento_acumulado_g) as (
     values
       ('Cobb 500',  0,   42.0,    0.0),
@@ -108,71 +142,65 @@ targets(linea_genetica, dia, peso_g, alimento_acumulado_g) as (
       ('Ross 308', 42, 2998.0, 4586.0)
 ),
 ages as (
-    select l.*,
-           (current_date - l.fecha_encaste)::integer as edad_actual,
-           d as dia
-    from all_demo_lots l
-    cross join lateral generate_series(1, least(42, (current_date - l.fecha_encaste)::integer)) d
+    select l.id, s.linea_genetica, s.fecha_encaste, s.lot_num, l.aves_totales, d as dia
+    from avi_demo_specs s join public.lotes l using (codigo_lote)
+    cross join lateral generate_series(1, s.dias_registrados) d
 ),
 interpolated as (
     select a.*,
-           lo.dia as dia_anterior,
-           case when hi.dia = lo.dia then lo.peso_g
-                else lo.peso_g + (a.dia - lo.dia) * (hi.peso_g - lo.peso_g) / (hi.dia - lo.dia)
-           end as peso_objetivo_g,
-           case when hi.dia = lo.dia then lo.alimento_acumulado_g
-                else lo.alimento_acumulado_g + (a.dia - lo.dia) *
-                  (hi.alimento_acumulado_g - lo.alimento_acumulado_g) / (hi.dia - lo.dia)
-           end as alimento_acum_objetivo_g
+           lo.peso_g + (a.dia - lo.dia) * (hi.peso_g - lo.peso_g) / greatest(hi.dia - lo.dia, 1) as peso_g,
+           lo.alimento_acumulado_g + (a.dia - lo.dia) *
+             (hi.alimento_acumulado_g - lo.alimento_acumulado_g) / greatest(hi.dia - lo.dia, 1) as alimento_g
     from ages a
     join lateral (
-      select t.* from targets t
-      where t.linea_genetica = a.linea_genetica and t.dia <= a.dia
+      select t.* from targets t where t.linea_genetica = a.linea_genetica and t.dia <= a.dia
       order by t.dia desc limit 1
     ) lo on true
     join lateral (
-      select t.* from targets t
-      where t.linea_genetica = a.linea_genetica and t.dia >= a.dia
+      select t.* from targets t where t.linea_genetica = a.linea_genetica and t.dia >= a.dia
       order by t.dia limit 1
     ) hi on true
 ),
-daily_values as (
-    select i.*,
-           coalesce(lag(i.alimento_acum_objetivo_g) over (partition by i.id order by i.dia), 0) as alimento_acum_previo_g
+daily as (
+    select i.*, (i.alimento_g - lag(i.alimento_g, 1, 0) over (partition by i.id order by i.dia))
+      * greatest(i.aves_totales - i.dia * 4, 1) / 1000.0
+      * (0.96 + (i.lot_num % 9) * 0.01) as alimento_kg,
+      i.peso_g * (0.955 + (i.lot_num % 10) * 0.01) as peso_demo
     from interpolated i
-),
-inserted_daily as (
-    insert into public.registros_diarios (
-      lote_id, fecha, dia_vida, mortalidad_hembra, mortalidad_macho,
-      descartes, descarte_hembra, descarte_macho, consumo_alimento_kg,
-      consumo_agua_litros, peso_promedio_mixto_g
-    )
-    select id, fecha_encaste + dia, dia_vida,
-           case when dia % 7 = 0 then 2 else 1 end,
-           case when dia % 5 = 0 then 2 else 1 end,
-           0, 0, 0,
-           round(((alimento_acum_objetivo_g - alimento_acum_previo_g) *
-             greatest(aves_totales - dia * 2, 1) / 1000.0)::numeric, 2),
-           round(((alimento_acum_objetivo_g - alimento_acum_previo_g) *
-             greatest(aves_totales - dia * 2, 1) * 1.8 / 1000.0)::numeric, 2),
-           round(peso_objetivo_g::numeric, 1)
-    from (
-      select d.*, d.dia as dia_vida from daily_values d
-    ) values_to_insert
-    on conflict (lote_id, fecha) do update set
-      dia_vida = excluded.dia_vida,
-      mortalidad_hembra = excluded.mortalidad_hembra,
-      mortalidad_macho = excluded.mortalidad_macho,
-      descartes = excluded.descartes,
-      descarte_hembra = excluded.descarte_hembra,
-      descarte_macho = excluded.descarte_macho,
-      consumo_alimento_kg = excluded.consumo_alimento_kg,
-      consumo_agua_litros = excluded.consumo_agua_litros,
-      peso_promedio_mixto_g = excluded.peso_promedio_mixto_g
-    returning id
 )
-select
-  (select count(*) from all_farms) as granjas_andinas,
-  (select count(*) from all_houses) as galpones_demo,
-  (select count(*) from all_demo_lots) as lotes_demo,
-  (select count(*) from inserted_daily) as registros_diarios_creados;
+insert into public.registros_diarios (
+  lote_id, fecha, dia_vida, mortalidad_hembra, mortalidad_macho, descartes,
+  descarte_hembra, descarte_macho, consumo_alimento_kg, consumo_agua_litros,
+  peso_promedio_mixto_g, peso_promedio_hembra_g, peso_promedio_macho_g
+)
+select id, fecha_encaste + dia - 1, dia,
+       1 + (dia + lot_num) % 3, 1 + (dia + 2 * lot_num) % 4, 0, 0, 0,
+       round(alimento_kg::numeric, 2), round((alimento_kg * (1.7 + (lot_num % 5) * 0.05))::numeric, 2),
+       round(peso_demo::numeric, 1), round((peso_demo * 0.94)::numeric, 1), round((peso_demo * 1.06)::numeric, 1)
+from daily
+on conflict (lote_id, fecha) do update set
+  mortalidad_hembra = excluded.mortalidad_hembra, mortalidad_macho = excluded.mortalidad_macho,
+  consumo_alimento_kg = excluded.consumo_alimento_kg, consumo_agua_litros = excluded.consumo_agua_litros,
+  peso_promedio_mixto_g = excluded.peso_promedio_mixto_g,
+  peso_promedio_hembra_g = excluded.peso_promedio_hembra_g, peso_promedio_macho_g = excluded.peso_promedio_macho_g
+where registros_diarios.created_by is null
+  and not exists (select 1 from public.registros_diarios_box b where b.registro_diario_id = registros_diarios.id);
+
+insert into public.galpon_boxes (lote_id, nombre_box, aves_hembra_inicial, aves_macho_inicial)
+select l.id, 'Box demo', l.aves_hembra, l.aves_macho
+from avi_demo_specs s join public.lotes l using (codigo_lote)
+where s.activo and l.activo and not exists (select 1 from public.galpon_boxes b where b.lote_id = l.id);
+
+insert into public.registros_diarios_box (
+  registro_diario_id, box_id, mortalidad_hembra, mortalidad_macho, descarte_hembra, descarte_macho,
+  consumo_alimento_kg, consumo_agua_litros, peso_promedio_hembra_g, peso_promedio_macho_g
+)
+select r.id, b.id, r.mortalidad_hembra, r.mortalidad_macho, r.descarte_hembra, r.descarte_macho,
+       r.consumo_alimento_kg, r.consumo_agua_litros, r.peso_promedio_hembra_g, r.peso_promedio_macho_g
+from avi_demo_specs s join public.lotes l using (codigo_lote)
+join public.galpon_boxes b on b.lote_id = l.id and b.nombre_box = 'Box demo'
+join public.registros_diarios r on r.lote_id = l.id and r.created_by is null
+where s.activo and l.activo
+on conflict (registro_diario_id, box_id) do nothing;
+
+commit;

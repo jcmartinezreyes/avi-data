@@ -2,3 +2,4 @@ streamlit
 pandas
 supabase
 folium>=0.20,<0.21
+plotly>=6,<7
