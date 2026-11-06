@@ -63,7 +63,10 @@ all_houses as (
 select n as lot_num, 'DEMO-AVI-2026-' || lpad(n::text, 3, '0') as codigo_lote,
        h.id as galpon_id,
        case when n % 2 = 0 then 'Cobb 500' else 'Ross 308' end as linea_genetica,
-       case when n <= 50 then date '2026-11-05' - (150 - 2 * (n - 1))
+       -- Avoid the existing organization's placement dates in this snapshot.
+       case when n = 28 then date '2026-07-31'
+            when n = 44 then date '2026-09-03'
+            when n <= 50 then date '2026-11-05' - (150 - 2 * (n - 1))
             else date '2026-11-05' - (5 + 5 * (n - 51)) end as fecha_encaste,
        n > 50 as activo,
        case when n <= 50 then 42 else 5 + 5 * (n - 51) end as dias_registrados
