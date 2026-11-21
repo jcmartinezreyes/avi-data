@@ -30,6 +30,36 @@ La administración de usuarios usa la Edge Function `manage-organization-users` 
 
 Configura `SUPABASE_URL` y `SUPABASE_PUBLISHABLE_KEY` en el entorno, instala `requirements.txt` y ejecuta la app. La app requiere iniciar sesión con un usuario creado o invitado en Supabase Auth.
 
+En Streamlit Community Cloud, las dos variables se pueden definir en **Settings → Secrets**.
+No se incluyen credenciales en el código. Python de despliegue: **3.11**.
+`requirements.txt` fija las versiones directas; `requirements.lock` conserva las
+dependencias transitivas verificadas. Para reproducirlas: `pip install -r requirements.lock`.
+
+## Correcciones de auditoría publicadas (21 de noviembre de 2026)
+
+Se conservan el diseño, mapa, perfiles, administración de miembros y sesiones de
+12 horas. La captura y configuración de lotes usan RPC transaccionales; el cierre
+registra fecha, motivo y peso final. Los gráficos comparan hasta tres lotes por
+genética y producción, con mediana histórica de ciclos cerrados y KPIs ponderados.
+Los indicadores acumulados requieren cobertura completa desde el alojamiento.
+
+Las seis migraciones de auditoría ya se aplicaron al proyecto Supabase. El MCP
+asigna sus propias versiones: **no volver a ejecutarlas por una diferencia de fecha**.
+
+| Archivo local (prefijo `2026112100000`) | Versión remota |
+| --- | --- |
+| `1_fix_rls_delete_permissions.sql` | `20261121130620` |
+| `2_fix_create_organization_plan.sql` | `20261121130625` |
+| `3_protect_boxes_and_add_indexes.sql` | `20261121130629` |
+| `4_daily_totals_trigger.sql` | `20261121130633` |
+| `5_lot_closure_and_daily_batch.sql` | `20261121130638` |
+| `6_weighted_daily_weights.sql` | `20261121130641` |
+
+`supabase/seed_martinez_poultry.sql` añade un conjunto sintético **adicional** de
+60 lotes con fotografía fija al 2026-11-21. No se ejecuta al arrancar ni durante
+este despliegue: se conservan los 60 lotes existentes para evitar duplicarlos.
+Su comprobación reversible está en `tests/phase5_seed_rollback.py`.
+
 ## Migraciones aplicadas
 
 - `20261103102544_multi_producer_production_model.sql`

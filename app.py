@@ -1,4 +1,5 @@
 import os
+from analytics import build_production_series
 import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -104,8 +105,22 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-URL = os.getenv("SUPABASE_URL", "https://zmpqrcqadrxevqyshvak.supabase.co")
-KEY = os.getenv("SUPABASE_PUBLISHABLE_KEY", "sb_publishable_--thXNjoDX0MmxrcOBFCLg_Lo5hHeCG")
+def configuracion(nombre):
+    valor = os.environ.get(nombre, "").strip()
+    if valor:
+        return valor
+    try:
+        return str(st.secrets.get(nombre, "")).strip()
+    except FileNotFoundError:
+        return ""
+
+
+URL = configuracion("SUPABASE_URL")
+KEY = configuracion("SUPABASE_PUBLISHABLE_KEY")
+if not URL or not KEY:
+    st.error("Configuración incompleta. Define SUPABASE_URL y SUPABASE_PUBLISHABLE_KEY en los secretos de Streamlit o en el entorno.")
+    st.stop()
+
 supabase = create_client(
     URL, KEY, options=ClientOptions(auto_refresh_token=False, persist_session=False)
 )
@@ -364,7 +379,7 @@ if opcion in page_meta:
 # ---------------------------------------------------------
 def consulta_lotes_organizacion():
     return supabase.table("lotes").select(
-        "*,galpones!inner(id,nombre,capacidad,granjas!inner(id,nombre,organization_id))"
+        "*,galpon_boxes(*),galpones!inner(id,nombre,capacidad,granjas!inner(id,nombre,organization_id))"
     ).eq("galpones.granjas.organization_id", organization_id)
 
 
@@ -399,23 +414,16 @@ def obtener_diarios(lotes_ids, desde=None):
             query = supabase.table("registros_diarios").select(
                 "id,lote_id,fecha,dia_vida,descartes,peso_promedio_mixto_g,"
                 + ",".join(CAMPOS_DIARIOS + CAMPOS_PESO)
-                + ",registros_diarios_box(" + ",".join(CAMPOS_DIARIOS + CAMPOS_PESO) + ")"
+                + ",registros_diarios_box(registro_diario_id,box_id," + ",".join(CAMPOS_DIARIOS + CAMPOS_PESO) + ")"
             ).in_("lote_id", ids)
             return query.gte("fecha", str(desde)) if desde else query
 
         diarios.extend(listar_filas(consulta))
 
     for fila in diarios:
-        boxes = fila.pop("registros_diarios_box", None)
-        if boxes:
-            for campo in CAMPOS_DIARIOS:
-                fila[campo] = sum(box.get(campo) or 0 for box in boxes)
-            for campo in CAMPOS_PESO:
-                pesos = [box[campo] for box in boxes if (box.get(campo) or 0) > 0]
-                fila[campo] = sum(pesos) / len(pesos) if pesos else None
-        pesos = [fila[campo] for campo in CAMPOS_PESO if (fila.get(campo) or 0) > 0]
-        if boxes or not fila.get("peso_promedio_mixto_g"):
-            fila["peso_promedio_mixto_g"] = sum(pesos) / len(pesos) if pesos else None
+        boxes = fila.get("registros_diarios_box") or []
+        # Consolidated values are maintained atomically by database triggers.
+        # Never replace population-weighted weights with means of box means.
         fila["mortalidad"] = sum(fila.get(campo) or 0 for campo in CAMPOS_DIARIOS[:2])
         descartes = sum(fila.get(campo) or 0 for campo in CAMPOS_DIARIOS[2:4])
         fila["bajas"] = fila["mortalidad"] + (descartes if boxes else descartes or fila.get("descartes") or 0)
@@ -490,17 +498,12 @@ def mostrar_lineas(series, metricas, eje_x, etiqueta_x):
 
 
 def series_productivas(diarios, lotes):
-    df = pd.DataFrame(diarios)
+    boxes = [dict(box, lote_id=lote["id"]) for lote in lotes for box in lote.get("galpon_boxes", [])]
+    detalles = [detalle for diario in diarios for detalle in diario.get("registros_diarios_box", [])]
+    df = pd.DataFrame(build_production_series(diarios, lotes, boxes, detalles))
     if df.empty:
         return df
-    df = df.dropna(subset=["dia_vida"]).sort_values(["lote_id", "dia_vida"])
-    aves = df["lote_id"].map({lote["id"]: lote.get("aves_totales") for lote in lotes}).astype(float)
-    aves = aves.where(aves > 0)
-    df["peso_promedio_mixto_g"] = df["peso_promedio_mixto_g"].where(df["peso_promedio_mixto_g"] > 0)
-    df["alimento_g_ave"] = df["consumo_alimento_kg"] * 1000 / aves
-    df["agua_ml_ave"] = df["consumo_agua_litros"] * 1000 / aves
-    df["mortalidad_pct"] = df.groupby("lote_id")["mortalidad"].cumsum() * 100 / aves
-    return df
+    return df.sort_values(["lote_id", "dia_vida"])
 
 
 def mostrar_mapa_granjas(granjas):
@@ -982,12 +985,28 @@ elif opcion == "3. Lotes":
                         st.session_state["lote_a_editar"] = por_id[lote_id]
                         st.rerun()
                     if current_role in ("owner", "admin"):
-                        confirmado = cerrar.checkbox("Confirmo que terminó el ciclo", key=f"cerrar_{lote_id}")
-                        if cerrar.button("Cerrar lote", disabled=not confirmado):
-                            resultado = consulta_lotes_organizacion().eq("id", lote_id).eq("activo", True).execute()
-                            if resultado.data:
-                                supabase.table("lotes").update({"activo": False}).eq("id", lote_id).eq("activo", True).execute()
-                            st.rerun()
+                        with st.form(f"cierre_lote_{lote_id}"):
+                            alojamiento = datetime.fromisoformat(por_id[lote_id]["fecha_encaste"]).date()
+                            hoy = datetime.now(ZoneInfo("America/Bogota")).date()
+                            fecha_cierre = st.date_input("Fecha de salida", min_value=min(alojamiento, hoy), max_value=hoy)
+                            motivo = st.selectbox("Motivo de cierre", ["Faena completa", "Venta en pie", "Traslado"])
+                            peso = st.number_input("Peso final medido (g)", min_value=0.0, step=50.0)
+                            confirmado = st.checkbox("Confirmo que terminó el ciclo de este lote")
+                            guardar = st.form_submit_button("Confirmar cierre")
+                        if guardar:
+                            if not confirmado or peso <= 0:
+                                st.error("Confirma el cierre e ingresa un peso final mayor que cero.")
+                            else:
+                                try:
+                                    supabase.rpc("close_lote", {
+                                        "p_lote_id": lote_id, "p_fecha_cierre": str(fecha_cierre),
+                                        "p_motivo": motivo, "p_peso_cierre_g": peso,
+                                    }).execute()
+                                except Exception:
+                                    st.error("No se pudo cerrar. Revisa permisos, fechas y registros posteriores a la salida.")
+                                else:
+                                    st.success("Lote cerrado. Su historial sigue disponible en Cerrados.")
+                                    st.rerun()
 
     else:
         lote_edit = st.session_state["lote_a_editar"]
@@ -1063,18 +1082,26 @@ elif opcion == "3. Lotes":
             for i in range(int(num_boxes)):
                 col_idx = i % 4
                 with cols_box[col_idx]:
-                    st.markdown(f"**Box #{i+1}**")
+                    box_existente = boxes_existentes[i] if i < len(boxes_existentes) else None
+                    nombre_box = box_existente["nombre_box"] if box_existente else f"Box {i+1}"
+                    box_key = f"{lote_edit['id'] if es_edicion else 'nuevo'}_{box_existente['id'] if box_existente else f'nuevo_{i}'}"
+                    st.markdown(f"**{nombre_box}**")
                     def_h_b = int(boxes_existentes[i]["aves_hembra_inicial"]) if i < len(boxes_existentes) else 0
                     def_m_b = int(boxes_existentes[i]["aves_macho_inicial"]) if i < len(boxes_existentes) else 0
                     
                     if modalidad_sexo in ["Sexado (Hembras / Machos)", "Mixto (As Sexed)"]:
-                        b_h = st.number_input(f"Hembras Box {i+1}", min_value=0, value=def_h_b, step=100, key=f"bh_{i}")
-                        b_m = st.number_input(f"Machos Box {i+1}", min_value=0, value=def_m_b, step=50, key=f"bm_{i}")
+                        b_h = st.number_input(f"Hembras Box {i+1}", min_value=0, value=def_h_b, step=100, key=f"bh_{box_key}")
+                        b_m = st.number_input(f"Machos Box {i+1}", min_value=0, value=def_m_b, step=50, key=f"bm_{box_key}")
                     else:
-                        b_h = st.number_input(f"Hembras Box {i+1}", min_value=0, value=def_h_b, step=100, key=f"bh_{i}")
+                        b_h = st.number_input(f"Hembras Box {i+1}", min_value=0, value=def_h_b, step=100, key=f"bh_{box_key}")
                         b_m = 0
                         
-                    datos_boxes_inputs.append({"box_num": i+1, "hembras": b_h, "machos": b_m})
+                    datos_boxes_inputs.append({
+                        "id": box_existente["id"] if box_existente else None,
+                        "nombre_box": nombre_box,
+                        "hembras": b_h,
+                        "machos": b_m,
+                    })
 
             # Suma de aves de todos los boxes
             tot_h_calculado = sum(b["hembras"] for b in datos_boxes_inputs)
@@ -1098,34 +1125,27 @@ elif opcion == "3. Lotes":
                         "activo": True
                     }
                     
-                    if es_edicion:
-                        lote_id_act = lote_edit["id"]
-                        vigente = consulta_lotes_organizacion().eq("id", lote_id_act).eq("activo", True).execute()
-                        if not vigente.data:
-                            st.error("Este lote ya está cerrado.")
-                            st.stop()
-                        cambios = {campo: valor for campo, valor in datos_lote.items() if campo != "activo"}
-                        actualizado = supabase.table("lotes").update(cambios).eq("id", lote_id_act).eq("activo", True).execute()
-                        if not actualizado.data:
-                            st.error("No se pudo guardar el lote activo.")
-                            st.stop()
-                        supabase.table("galpon_boxes").delete().eq("lote_id", lote_id_act).execute()
-                    else:
-                        res_ins = supabase.table("lotes").insert(datos_lote).execute()
-                        lote_id_act = res_ins.data[0]["id"]
-                        
-                    # Insertar nuevos boxes
-                    filas_boxes = [
-                        {
-                            "lote_id": lote_id_act,
-                            "nombre_box": f"Box {b['box_num']}",
-                            "aves_hembra_inicial": b["hembras"],
-                            "aves_macho_inicial": b["machos"]
-                        }
-                        for b in datos_boxes_inputs
-                    ]
-                    supabase.table("galpon_boxes").insert(filas_boxes).execute()
-                    
+                    # One RPC transaction preserves box IDs and rolls back the entire save on failure.
+                    filas_boxes = [{
+                        "id": box["id"],
+                        "nombre_box": box["nombre_box"],
+                        "aves_hembra_inicial": box["hembras"],
+                        "aves_macho_inicial": box["machos"],
+                    } for box in datos_boxes_inputs]
+                    try:
+                        supabase.rpc("save_lote_with_boxes", {
+                            "p_lote": datos_lote,
+                            "p_boxes": filas_boxes,
+                            "p_lote_id": lote_edit["id"] if es_edicion else None,
+                        }).execute()
+                    except Exception:
+                        st.error(
+                            "No se pudo guardar la configuración. Comprueba tus permisos y "
+                            "que el lote siga activo. Los boxes con historial deben conservarse. "
+                            "Si el problema continúa, contacta al administrador."
+                        )
+                        st.stop()
+
                     st.success("¡Lote y distribución por boxes guardados exitosamente!")
                     st.session_state["ver_formulario_lote"] = False
                     st.session_state["lote_a_editar"] = None
@@ -1237,45 +1257,21 @@ elif opcion == "4. Ingreso Diario":
 
                 label = "Actualizar Registro Diario" if registro_previo else "Guardar Registro Diario del Lote"
                 if st.button(label, type="primary"):
-                    vigente = consulta_lotes_organizacion().eq("id", lote_info["id"]).eq("activo", True).execute()
-                    if not vigente.data:
-                        st.error("Este lote ya está cerrado. Selecciona otro lote activo.")
-                        st.stop()
-                    header = {"lote_id": lote_info["id"], "fecha": str(fecha_registro), "dia_vida": int(dia_vida_calculado)}
-                    if registro_previo:
-                        reg_id = registro_previo["id"]
-                        supabase.table("registros_diarios").update(header).eq("id", reg_id).execute()
-                    else:
-                        reg_id = supabase.table("registros_diarios").insert(header).execute().data[0]["id"]
-
                     filas_box = [{
-                        "registro_diario_id": reg_id,
                         "box_id": x["box_id"],
-                        "mortalidad_hembra": x["mh"],
-                        "mortalidad_macho": x["mm"],
-                        "descarte_hembra": x["dh"],
-                        "descarte_macho": x["dm"],
-                        "consumo_alimento_kg": x["ali"],
-                        "consumo_agua_litros": x["agu"],
-                        "peso_promedio_hembra_g": x["ph"],
-                        "peso_promedio_macho_g": x["pm"],
+                        "mortalidad_hembra": x["mh"], "mortalidad_macho": x["mm"],
+                        "descarte_hembra": x["dh"], "descarte_macho": x["dm"],
+                        "consumo_alimento_kg": x["ali"], "consumo_agua_litros": x["agu"],
+                        "peso_promedio_hembra_g": x["ph"], "peso_promedio_macho_g": x["pm"],
+                        "metricas": x["metricas"],
                     } for x in datos_ingresados_boxes]
-                    supabase.table("registros_diarios_box").upsert(
-                        filas_box, on_conflict="registro_diario_id,box_id"
-                    ).execute()
-
-                    for x in datos_ingresados_boxes:
-                        supabase.table("mediciones_produccion").delete().eq(
-                            "registro_diario_id", reg_id
-                        ).eq("box_id", x["box_id"]).execute()
-                        filas_metricas = [{
-                            "registro_diario_id": reg_id,
-                            "box_id": x["box_id"],
-                            "codigo_metrica": m["codigo_metrica"],
-                            "valor": m["valor"],
-                        } for m in x["metricas"]]
-                        if filas_metricas:
-                            supabase.table("mediciones_produccion").insert(filas_metricas).execute()
+                    try:
+                        supabase.rpc("save_daily_record", {
+                            "p_lote_id": lote_info["id"], "p_fecha": str(fecha_registro), "p_boxes": filas_box,
+                        }).execute()
+                    except Exception:
+                        st.error("No se pudo guardar el registro completo. Revisa que el lote siga activo y los datos sean válidos.")
+                        st.stop()
 
                     st.success("Registro diario guardado. Los totales se calculan desde el detalle por box.")
                     st.rerun()
@@ -1309,28 +1305,23 @@ elif opcion == "📈 Análisis Gerencial" and current_role in ("owner", "admin",
         lote = por_id[lote_id]
         return f"{lote['codigo_lote']} · {lote['galpones']['granjas']['nombre']} · {lote['fecha_encaste']}"
 
-    st.subheader("Lotes en producción")
+    st.subheader("Selección y comparación de lotes")
     ids_activos = [lote["id"] for lote in activos]
-    seleccion_activos = st.multiselect(
-        "Selecciona los lotes activos que quieres comparar", ids_activos,
-        default=ids_activos[:1], format_func=etiqueta_lote,
-        max_selections=6, disabled=not ids_activos, key=f"avi_compare_active_{tipo}_{linea}",
-    )
-    if not ids_activos:
-        st.caption("No hay lotes activos para esta línea genética.")
-
-    st.subheader("Referencia de ciclos cerrados")
     ids_historicos = [lote["id"] for lote in historicos]
-    usar_referencia = st.checkbox("Mostrar la mediana histórica por día de vida", value=True, disabled=not ids_historicos)
-    seleccion_cerrados = st.multiselect(
-        "Añade lotes cerrados individuales para comparar", ids_historicos,
-        format_func=etiqueta_lote, max_selections=6, disabled=not ids_historicos,
-        key=f"avi_compare_closed_{tipo}_{linea}",
+    disponibles = ids_activos + ids_historicos
+    seleccion = st.multiselect(
+        "Selecciona hasta 3 lotes para comparar sus curvas", disponibles,
+        default=disponibles[:2], max_selections=3,
+        format_func=lambda i: etiqueta_lote(i) + (" · Activo" if por_id[i]["activo"] else " · Cerrado"),
+        placeholder="Elige los lotes a comparar", key=f"avi_compare_{tipo}_{linea}",
     )
-    if not ids_historicos:
-        st.caption("No hay ciclos cerrados para construir una referencia de esta línea.")
-
-    seleccion = seleccion_activos + seleccion_cerrados
+    usar_referencia = st.checkbox(
+        "Mostrar la mediana histórica de lotes cerrados por día de vida", value=True,
+        disabled=not ids_historicos,
+    )
+    if not seleccion and not (usar_referencia and ids_historicos):
+        st.info("Selecciona un lote o activa la referencia histórica para ver los gráficos.")
+        st.stop()
     incluir_referencia = usar_referencia and bool(ids_historicos)
     consulta_ids = sorted(set(seleccion + (ids_historicos if incluir_referencia else [])))
     datos = series_productivas(obtener_diarios(consulta_ids), cohorte)
@@ -1340,8 +1331,11 @@ elif opcion == "📈 Análisis Gerencial" and current_role in ("owner", "admin",
 
     metricas = [
         ("peso_promedio_mixto_g", "Peso promedio (g)"),
-        ("alimento_g_ave", "Alimento diario (g/ave alojada)"),
-        ("agua_ml_ave", "Agua diaria (ml/ave alojada)"),
+        ("fcr_acumulado", "Conversión acumulada (kg/kg biomasa viva)"),
+        ("consumo_g_ave", "Alimento diario (g/ave viva)"),
+        ("ratio_agua_alimento", "Agua / alimento (L/kg)"),
+        ("gmd_g", "Ganancia entre pesajes (g/día)"),
+        ("epef", "Índice de eficiencia productiva"),
         ("mortalidad_pct", "Mortalidad acumulada registrada (%)"),
     ]
     curvas = []
@@ -1367,8 +1361,8 @@ elif opcion == "📈 Análisis Gerencial" and current_role in ("owner", "admin",
             st.caption(f"{codigo} aún no tiene registros diarios.")
         else:
             estado = "Activo" if por_id[lote_id]["activo"] else "Cerrado"
-            curvas.append((f"{codigo} · {estado}", serie, False))
+            curvas.append((f"{codigo} · ID {lote_id} · {estado}", serie, False))
 
     if curvas:
         mostrar_lineas(curvas, metricas, "dia_vida", "Día de vida")
-        st.caption("Los consumos se normalizan por aves alojadas. La mortalidad acumulada suma los registros disponibles.")
+        st.caption("Pesos ponderados por saldo vivo de box y sexo. FCR = alimento acumulado / biomasa viva. Indicadores acumulados vacíos cuando falta cobertura; la referencia es la mediana interna de ciclos cerrados de la misma genética y producción.")

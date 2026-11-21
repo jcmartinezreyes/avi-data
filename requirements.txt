@@ -1,5 +1,5 @@
-streamlit
-pandas
-supabase
-folium>=0.20,<0.21
-plotly>=6,<7
+streamlit==1.40.2
+pandas==2.2.3
+supabase==2.33.0
+folium==0.20.0
+plotly==6.9.0

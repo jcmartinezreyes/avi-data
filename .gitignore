@@ -1,0 +1,10 @@
+# Configuración local y secretos. Se versiona solo la plantilla de ejemplo.
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+
+# Archivos locales generados.
+__pycache__/
+*.py[cod]
+.DS_Store
