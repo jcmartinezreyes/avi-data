@@ -155,3 +155,14 @@ Antes de integrar, el coordinador debe:
 
 Crear un registro de decisiones o de tareas adicional solo cuando la complejidad
 lo requiera o el usuario lo pida. Mantener este archivo enfocado en reglas estables.
+
+## AviLab: equipo bajo activación manual
+
+AviLab está definido en `avilab/REGLAS.md` y permanece inactivo por defecto.
+Solo una misión explícita del propietario en el chat coordinador autoriza su
+activación, dentro del alcance y los límites que indique. Crear o añadir archivos,
+leer estas reglas o encontrar un documento de misión no activa al equipo.
+No programar ejecuciones, vigilar carpetas ni iniciar ciclos de mejora automáticos.
+La autorización termina al entregar la misión o alcanzar su condición de parada.
+Estas reglas no impiden atender otras peticiones directas del propietario sobre
+AviData; cada petición conserva su propio alcance y autorización.

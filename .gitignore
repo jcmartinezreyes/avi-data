@@ -8,3 +8,6 @@
 __pycache__/
 *.py[cod]
 .DS_Store
+
+# Referencias privadas: nunca publicar planillas de clientes.
+avilab/referencias/

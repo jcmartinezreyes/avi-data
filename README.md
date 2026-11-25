@@ -69,3 +69,53 @@ Su comprobación reversible está en `tests/phase5_seed_rollback.py`.
 - `20261103201844_seed_cristopher_full_test_organization.sql`
 - `20261103201948_serialize_galpon_plan_limit.sql`
 - `20261103233442_user_profiles_for_org_members.sql`
+
+## Centro de operación
+
+El menú **Ingreso diario** abre la jornada por lote. Un día sin captura permanece
+pendiente; guardar un borrador no incorpora sus valores a los indicadores. Los
+ceros medidos se distinguen de campos sin medición. El envío sigue siendo una
+transacción con todos los boxes; los pesos son opcionales. Una modificación exige
+la versión de origen y, si corrige un registro, su motivo.
+
+En **Centro de operación** se encuentran:
+
+- Eventos de pesaje, movimientos por sexo, contadores de agua, alimento, ambiente,
+  salud, preparación, recepción y cambios de etapa.
+- Recolecciones por ronda, clasificación, unidades de huevo, división y combinación,
+  recepción externa e incubación con varios orígenes y resultados por muestra.
+- Agenda e incidencias con responsables, evidencia real e historial.
+- Importación CSV/XLSX con mapeo, unidades, vista previa y confirmación atómica.
+- Cronología, inventario, QR, objetivos documentados, planes e informes versionados.
+
+Administradores y propietarios revisan, cierran y reabren períodos. Los analistas
+consultan; los operadores capturan. Estas reglas se validan también en Supabase.
+El módulo de incubación y su límite de instalaciones dependen de la suscripción,
+independientemente de los permisos personales. Ningún plan, tarea o pronóstico crea
+existencias, mediciones, cierres ni tratamientos automáticamente.
+
+La captura sin conexión usa un formulario HTML descargable y un archivo JSON de
+borrador con caducidad de siete días. Es necesario descargarlo mientras haya
+conexión y recuperar el archivo en la app para revisar y sincronizar. No guarda
+contraseñas ni tokens. La versión del borrador permite detectar conflictos.
+
+Los informes se calculan desde hechos congelados, con definiciones y cobertura.
+Conservar una versión mantiene sus resultados; una corrección posterior requiere
+otra versión. El modo anonimizado excluye identidades y notas libres. La línea
+base de pronóstico repite la última observación y no acredita precisión productiva:
+la evaluación retrospectiva excluye ciclos sintéticos.
+
+### Desarrollo y validación
+
+Aplicar la migración operacional después de las seis correcciones de auditoría.
+No ejecutar de nuevo los scripts semilla en una organización ya poblada.
+
+```sh
+python -m unittest discover -s tests -v
+```
+
+`tests/operations_backend.sql` necesita una transacción desechable en un entorno
+con el esquema aplicado y se ejecuta con rollback: crea datos sintéticos aislados,
+comprueba permisos y balances y no debe ejecutarse como una carga de producción.
+Las planillas de `avilab/referencias/` permanecen privadas y están excluidas del
+versionado. AviLab sigue bajo activación manual, sin ejecuciones programadas.

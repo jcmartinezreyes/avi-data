@@ -102,6 +102,53 @@ class ProductionAnalyticsTests(unittest.TestCase):
         self.assertIsNone(row['alimento_acum_kg'])
         self.assertIsNone(row['peso_promedio_mixto_g'])
 
+    def test_draft_does_not_contribute_or_conflict_with_submitted_day(self):
+        rows = build_production_series([
+            self.daily(1, 1, status='draft', consumo_alimento_kg=999),
+            self.daily(2, 1, status='submitted', peso_promedio_mixto_g=1000),
+        ], [self.lot], [], [])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]['alimento_acum_kg'], 10)
+
+    def test_sale_reduces_live_but_is_not_mortality_and_fcr_requires_biomass(self):
+        rows = build_production_series([self.daily(1, 1)], [self.lot], self.boxes, [
+            self.detail(1, 11, peso_promedio_hembra_g=100),
+            self.detail(1, 12, peso_promedio_hembra_g=200, peso_promedio_macho_g=400),
+        ], movements=[{'lote_id': 1, 'box_id': 11, 'fecha': '2026-11-01',
+                       'sex': 'hembra', 'kind': 'sale', 'count': 20}])
+        row = rows[0]
+        self.assertEqual(row['aves_vivas'], 80)
+        self.assertEqual(row['mortalidad_pct'], 0)
+        self.assertEqual(row['viabilidad_pct'], 100)
+        self.assertEqual(row['peso_promedio_mixto_g'], 150)
+        self.assertIsNone(row['fcr_acumulado'])
+        self.assertEqual(row['fcr_metodo'], 'unavailable_departure_biomass')
+
+    def test_arrival_updates_weight_denominator_and_sex_population(self):
+        row = build_production_series([self.daily(1, 1)], [self.lot], self.boxes, [
+            self.detail(1, 11, peso_promedio_hembra_g=100),
+            self.detail(1, 12, peso_promedio_hembra_g=200, peso_promedio_macho_g=400),
+        ], movements=[{'lote_id': 1, 'box_id': 11, 'fecha': '2026-11-01',
+                       'sex': 'hembra', 'kind': 'arrival', 'count': 100}])[0]
+        self.assertEqual(row['aves_vivas'], 200)
+        self.assertEqual(row['aves_vivas_hembra'], 190)
+        self.assertEqual(row['peso_promedio_mixto_g'], 120)
+        self.assertEqual(row['denominador_aves_expuestas'], 200)
+
+    def test_internal_box_transfer_preserves_exposure_and_fcr(self):
+        row = build_production_series([self.daily(1, 1)], [self.lot], self.boxes, [
+            self.detail(1, 11, peso_promedio_hembra_g=100),
+            self.detail(1, 12, peso_promedio_hembra_g=200, peso_promedio_macho_g=400),
+        ], movements=[
+            {'event_id': 'same', 'lote_id': 1, 'box_id': 11, 'fecha': '2026-11-01',
+             'sex': 'hembra', 'kind': 'transfer_out', 'count': 20},
+            {'event_id': 'same', 'lote_id': 1, 'box_id': 12, 'fecha': '2026-11-01',
+             'sex': 'hembra', 'kind': 'transfer_in', 'count': 20}])[0]
+        self.assertEqual(row['aves_vivas'], 100)
+        self.assertEqual(row['denominador_aves_expuestas'], 100)
+        self.assertEqual(row['peso_promedio_mixto_g'], 160)
+        self.assertIsNotNone(row['fcr_acumulado'])
+
     def test_duplicate_day_rejected(self):
         with self.assertRaises(ValueError):
             build_production_series([self.daily(1, 1), self.daily(2, 1)], [self.lot], [], [])

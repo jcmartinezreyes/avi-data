@@ -8,6 +8,7 @@ cffi==2.1.1
 charset-normalizer==3.5.2
 click==8.5.1
 cryptography==50.0.2
+defusedxml==0.7.1
 deprecation==2.1.0
 folium==0.20.0
 h11==0.16.0
@@ -19,8 +20,8 @@ hyperframe==6.1.0
 idna==3.20
 itsdangerous==2.2.0
 jinja2==3.1.6
-jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
+jsonschema==4.26.0
 markupsafe==3.0.4
 multidict==7.2.1
 narwhals==2.29.0
@@ -34,13 +35,14 @@ propcache==0.5.4
 protobuf==7.36.2
 pyarrow==24.0.0
 pycparser==3.12
-pydantic==2.14.4
 pydantic-core==2.50.5
+pydantic==2.14.4
 pydeck==0.9.3
 pyjwt==2.15.1
 python-dateutil==4.0.0
 python-multipart==0.0.34
 pytz==2026.6
+qrcode==8.2
 realtime==2.33.0
 referencing==0.37.0
 requests==2.34.2
@@ -49,9 +51,9 @@ starlette==1.10.0
 storage3==2.33.0
 streamlit==1.67.0
 strenum==0.5.0
-supabase==2.33.0
 supabase-auth==2.33.0
 supabase-functions==2.33.0
+supabase==2.33.0
 typing-extensions==4.16.0
 typing-inspection==0.4.5
 tzdata==2026.6

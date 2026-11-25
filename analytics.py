@@ -2,7 +2,8 @@
 
 Weights use surviving birds represented by each box and sex. There is no sample
 count in the current schema. Feed conversion estimates standing live biomass,
-not marketed output, because partial bird departures are not recorded yet.
+not marketed output. If a departure is present, conversion remains unavailable
+until marketed biomass can be reconciled; it must not be presented as standing-only FCR.
 """
 from collections import defaultdict
 from datetime import date
@@ -40,10 +41,12 @@ def _weighted(observations):
     return sum(weight * count for weight, count in represented) / sum(count for _, count in represented)
 
 
-def build_production_series(diarios, lotes, boxes, detalles):
+def build_production_series(diarios, lotes, boxes, detalles, movements=None):
     """Return one row per lot/date, ordered by lot and placement-based age.
 
-    Missing weights and undefined ratios are None. Cumulative indicators require
+    Normalized movements use lote_id,box_id,fecha,sex,kind,count. Reception
+    acknowledgments must not be passed as arrivals when placement already includes
+    those birds. Missing weights and undefined ratios are None. Cumulative indicators require
     an uninterrupted sequence from placement day 1. Daily observed totals remain
     visible even when earlier days are missing.
     """
@@ -56,8 +59,15 @@ def build_production_series(diarios, lotes, boxes, detalles):
         by_daily[detail['registro_diario_id']].append(detail)
     grouped = defaultdict(list)
     for daily in diarios:
+        # Legacy headers have no capture status and remain historical observations.
+        if daily.get('status', daily.get('estado_captura')) in ('draft', 'pending', 'borrador', 'pendiente'):
+            continue
         if daily['lote_id'] in by_lot:
             grouped[daily['lote_id']].append(daily)
+    moves_by_lot = defaultdict(list)
+    for movement in movements or []:
+        if movement.get('status') not in ('draft', 'pending', 'borrador'):
+            moves_by_lot[movement['lote_id']].append(movement)
     output = []
     for lot_id, records in grouped.items():
         lot = by_lot[lot_id]
@@ -68,8 +78,20 @@ def build_production_series(diarios, lotes, boxes, detalles):
         if initial is None:
             initial = initial_h + initial_m
         cumulative_losses = cumulative_deaths = cumulative_feed = 0.0
-        losses_h = losses_m = 0.0
+        losses_h = losses_m = deaths_h = deaths_m = 0.0
         box_losses = defaultdict(lambda: [0.0, 0.0])
+        move_rows = sorted(moves_by_lot[lot_id], key=lambda item: str(item.get('fecha', item.get('observed_at', ''))))
+        transfer_nets = defaultdict(float)
+        for move in move_rows:
+            if move.get('event_id') and move.get('kind') in ('transfer_in', 'transfer_out'):
+                value = _number(move.get('count'))
+                if value is not None:
+                    transfer_nets[(move['event_id'], move.get('sex'))] += value * (1 if move['kind'] == 'transfer_in' else -1)
+        move_index = 0
+        net_moves = net_h = net_m = 0.0
+        arrivals = arrivals_h = arrivals_m = 0.0
+        box_moves = defaultdict(lambda: [0.0, 0.0])
+        has_departures = False
         complete = True
         box_balance_known = True
         previous_day = 0
@@ -80,6 +102,38 @@ def build_production_series(diarios, lotes, boxes, detalles):
             age = (current_date - placement).days + 1
             if age <= previous_day:
                 raise ValueError('Duplicate or invalid production date for lot')
+            while move_index < len(move_rows):
+                move = move_rows[move_index]
+                move_date = date.fromisoformat(str(move.get('fecha', move.get('observed_at')))[:10])
+                if move_date > current_date:
+                    break
+                if move_date < placement:
+                    raise ValueError('Bird movement predates lot placement')
+                count = _number(move.get('count'))
+                sex = move.get('sex')
+                kind = move.get('kind')
+                if count is None or not count.is_integer() or sex not in ('hembra', 'macho', 'mixto') or kind not in ('arrival', 'transfer_in', 'sale', 'transfer_out'):
+                    raise ValueError('Invalid normalized bird movement')
+                sign = 1 if kind in ('arrival', 'transfer_in') else -1
+                net_moves += count * sign
+                internal_transfer = bool(move.get('event_id')) and kind.startswith('transfer_') and abs(transfer_nets[(move['event_id'], sex)]) < .000001
+                if sign > 0 and not internal_transfer:
+                    arrivals += count
+                elif sign < 0 and not internal_transfer:
+                    has_departures = True
+                if sex == 'hembra':
+                    net_h += sign * count
+                    arrivals_h += count if sign > 0 and not internal_transfer else 0
+                elif sex == 'macho':
+                    net_m += sign * count
+                    arrivals_m += count if sign > 0 and not internal_transfer else 0
+                if sex == 'mixto' or move.get('box_id') not in lot_boxes[lot_id]:
+                    box_balance_known = False
+                else:
+                    box_moves[move['box_id']][0 if sex == 'hembra' else 1] += count * sign
+                if initial + net_moves - cumulative_losses < 0:
+                    raise ValueError('Bird movement exceeds live lot balance')
+                move_index += 1
             details = by_daily.get(record['id'], [])
             row = dict(record)
             sources = details or [record]
@@ -93,12 +147,14 @@ def build_production_series(diarios, lotes, boxes, detalles):
             day_losses = sum(row[field] or 0 for field in LOSS_FIELDS)
             if not details and not sum(row[field] or 0 for field in LOSS_FIELDS[2:]):
                 day_losses += _number(record.get('descartes')) or 0
-            live_before = initial - cumulative_losses
+            live_before = initial + net_moves - cumulative_losses
             cumulative_losses += day_losses
             cumulative_deaths += (row['mortalidad_hembra'] or 0) + (row['mortalidad_macho'] or 0)
+            deaths_h += row['mortalidad_hembra'] or 0
+            deaths_m += row['mortalidad_macho'] or 0
             losses_h += (row['mortalidad_hembra'] or 0) + (row['descarte_hembra'] or 0)
             losses_m += (row['mortalidad_macho'] or 0) + (row['descarte_macho'] or 0)
-            live = initial - cumulative_losses
+            live = initial + net_moves - cumulative_losses
             detail_coverage = True
             if details:
                 seen_boxes = set()
@@ -114,8 +170,8 @@ def build_production_series(diarios, lotes, boxes, detalles):
                 detail_coverage = bool(lot_boxes[lot_id]) and set(details_by_box) == set(lot_boxes[lot_id])
                 for box_id, box in lot_boxes[lot_id].items():
                     detail = details_by_box.get(box_id, {})
-                    count_h = (_number(box.get('aves_hembra_inicial')) or 0) - box_losses[box_id][0]
-                    count_m = (_number(box.get('aves_macho_inicial')) or 0) - box_losses[box_id][1]
+                    count_h = (_number(box.get('aves_hembra_inicial')) or 0) - box_losses[box_id][0] + box_moves[box_id][0]
+                    count_m = (_number(box.get('aves_macho_inicial')) or 0) - box_losses[box_id][1] + box_moves[box_id][1]
                     if count_h < 0 or count_m < 0:
                         box_balance_known = False
                     weights_h.append((_positive(detail.get('peso_promedio_hembra_g')), max(count_h, 0)))
@@ -134,8 +190,8 @@ def build_production_series(diarios, lotes, boxes, detalles):
                     row[field] = _positive(record.get(field))
                 if row['peso_promedio_mixto_g'] is None:
                     row['peso_promedio_mixto_g'] = _weighted([
-                        (row['peso_promedio_hembra_g'], max(initial_h - losses_h, 0)),
-                        (row['peso_promedio_macho_g'], max(initial_m - losses_m, 0)),
+                        (row['peso_promedio_hembra_g'], max(initial_h + net_h - losses_h, 0)),
+                        (row['peso_promedio_macho_g'], max(initial_m + net_m - losses_m, 0)),
                     ])
             feed = row['consumo_alimento_kg']
             water = row['consumo_agua_litros']
@@ -150,20 +206,29 @@ def build_production_series(diarios, lotes, boxes, detalles):
                     gmd = (weight - previous_weight) / (age - previous_weight_day)
                 previous_weight, previous_weight_day = weight, age
             fcr = None
-            if lot.get('tipo_produccion', 'engorde') == 'engorde' and complete and weight is not None and live > 0:
+            if lot.get('tipo_produccion', 'engorde') == 'engorde' and not has_departures and complete and weight is not None and live > 0:
                 fcr = cumulative_feed / (live * weight / 1000)
-            survival = live / initial * 100 if complete and initial > 0 else None
+            exposed = initial + arrivals
+            survival = (exposed - cumulative_losses) / exposed * 100 if complete and exposed > 0 else None
             average_live = (live_before + live) / 2
             row.update({
                 'codigo_lote': lot.get('codigo_lote', str(lot_id)),
                 'linea_genetica': lot.get('linea_genetica'),
                 'tipo_produccion': lot.get('tipo_produccion', 'engorde'),
+                'stage': record.get('stage', lot.get('stage')),
                 'dia_vida': age,
                 'bajas_dia': day_losses if losses_known else None,
                 'bajas_acum': cumulative_losses if complete else None,
                 'alimento_acum_kg': cumulative_feed if complete else None,
                 'aves_vivas': live if complete else None,
-                'mortalidad_pct': cumulative_deaths / initial * 100 if complete and initial > 0 else None,
+                'mortalidad_pct': cumulative_deaths / exposed * 100 if complete and exposed > 0 else None,
+                'denominador_aves_expuestas': exposed,
+                'mortalidad_hembra_pct': deaths_h / (initial_h + arrivals_h) * 100 if complete and initial_h + arrivals_h > 0 and box_balance_known else None,
+                'mortalidad_macho_pct': deaths_m / (initial_m + arrivals_m) * 100 if complete and initial_m + arrivals_m > 0 and box_balance_known else None,
+                'aves_vivas_hembra': initial_h + net_h - losses_h if complete and box_balance_known else None,
+                'aves_vivas_macho': initial_m + net_m - losses_m if complete and box_balance_known else None,
+                'movimientos_netos': net_moves,
+                'fcr_metodo': 'standing_biomass' if not has_departures else 'unavailable_departure_biomass',
                 'viabilidad_pct': survival,
                 'consumo_g_ave': feed * 1000 / average_live if feed is not None and complete and average_live > 0 else None,
                 'ratio_agua_alimento': water / feed if water is not None and feed is not None and feed > 0 else None,
