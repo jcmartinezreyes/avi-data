@@ -55,7 +55,36 @@ def _table(rows, columns=None):
     frame = pd.DataFrame(rows)
     if columns:
         frame = frame[[c for c in columns if c in frame.columns]]
-    st.dataframe(frame, hide_index=True, use_container_width=True, height=min(420, 70 + 35 * len(frame)))
+    enum_labels = {
+        'status': {'draft':'Borrador','submitted':'Enviado','reviewed':'Revisado','closed':'Cerrado', 'open':'Pendiente','done':'Realizada','cancelled':'Cancelada','acknowledged':'Reconocida','resolved':'Resuelta','set':'Cargada','transferred':'Transferida','hatched':'Nacida'},
+        'quality': {'observed':'Observado','estimated':'Estimado','corrected':'Corregido'},
+        'source': {'manual':'Manual','import':'Importación','sensor':'Sensor','legacy':'Histórico'},
+        'kind': {'bird_movement':'Movimiento de aves','weighing':'Pesaje','water_reading':'Lectura de agua','feed_movement':'Movimiento de alimento','environment':'Ambiente','health':'Salud','stage':'Cambio de etapa','readiness':'Preparación','arrival':'Recepción de aves','egg_collection':'Recolección','egg_receipt':'Recepción de huevos','egg_classification':'Clasificación','egg_transfer':'Movimiento de huevos','egg_split':'División','egg_merge':'Combinación','hatch_set':'Carga de incubación','hatch_transfer':'Transferencia de incubación','hatch_result':'Resultado de nacimiento','task':'Tarea','task_update':'Actualización de tarea','incident':'Incidencia','incident_update':'Seguimiento de incidencia','plan':'Plan','target':'Objetivo documentado','snapshot':'Informe conservado'}}
+    for field, values in enum_labels.items():
+        if field in frame:
+            frame[field] = frame[field].map(lambda value: values.get(value, value) if isinstance(value, str) else value)
+    labels = {**{code: label for code, label, _, _ in FIELDS},
+        'box_id': 'Box', 'lote_id': 'Lote', 'id': 'Identificador', 'kind': 'Tipo de hecho',
+        'observed_at': 'Fecha y hora observadas', 'received_at': 'Fecha de recepción',
+        'quantity': 'Cantidad', 'quantity_female': 'Hembras', 'quantity_male': 'Machos',
+        'weight_g': 'Peso medio · g', 'unit': 'Unidad', 'sex': 'Sexo', 'stage': 'Etapa',
+        'source': 'Procedencia', 'quality': 'Condición del dato', 'note': 'Observación',
+        'version': 'Versión', 'status': 'Estado', 'reason': 'Motivo',
+        'created_by': 'Responsable del registro', 'created_at': 'Fecha de creación',
+        'payload': 'Datos de la versión', 'title': 'Descripción', 'due_date': 'Vencimiento',
+        'assigned_to': 'Responsable', 'evidence_event_id': 'Hecho que acredita la tarea',
+        'rule_version': 'Regla y versión', 'explanation': 'Explicación',
+        'name': 'Nombre', 'edition': 'Edición', 'genetics': 'Genética', 'metric': 'Indicador',
+        'denominator': 'Denominador', 'source_url': 'Fuente', 'target_date': 'Fecha prevista',
+        'value': 'Valor', 'temperature_c': 'Temperatura · °C', 'humidity_pct': 'Humedad · %',
+        'row_number': 'Fila', 'errors': 'Observaciones de validación', 'missing_fields': 'Campos pendientes',
+        'parent_id': 'Unidad de origen', 'child_id': 'Unidad derivada', 'unit_id': 'Unidad de huevo',
+        'batch_id': 'Carga de incubación', 'quantity_kg': 'Cantidad · kg', 'warehouse': 'Almacén',
+        'closing_kg': 'Existencia · kg', 'coverage_days': 'Días de cobertura',
+        'sample_n': 'Tamaño de muestra', 'mean_g': 'Media muestral · g',
+        'sd_g': 'Desviación muestral · g', 'cv_pct': 'CV muestral · %', 'uniformity_pct': 'Uniformidad muestral · %'}
+    st.dataframe(frame.rename(columns=labels), hide_index=True, use_container_width=True,
+                 height=min(420, 70 + 35 * len(frame)))
 
 
 def _rpc(client, name, params):
@@ -249,7 +278,8 @@ def _jornada(client, org, user, role, lotes, today):
             row['measurement_states'] = states
             payload.append(row)
     st.markdown('**Revisión antes de enviar**')
-    _table([{k: v for k, v in b.items() if k not in ('metricas', 'measurement_states')} for b in payload])
+    box_names = {box['id']: box.get('nombre_box', str(box['id'])) for box in boxes}
+    _table([{k: (box_names.get(v, v) if k == 'box_id' else v) for k, v in b.items() if k not in ('metricas', 'measurement_states')} for b in payload])
     _download_draft(org, user, lot['id'], day, payload, version)
     reason = st.text_input('Observación o motivo de corrección', key=f'op_daily_reason_{lot["id"]}_{day}')
     def save(status):
@@ -265,7 +295,10 @@ def _jornada(client, org, user, role, lotes, today):
         if c1.button('Guardar borrador', key='op_daily_save', use_container_width=True):
             save('draft')
         if required_missing:
-            st.info('Puedes guardar el borrador. Para enviar faltan mediciones obligatorias: ' + '; '.join(required_missing))
+            st.info(f'Puedes guardar el borrador. Faltan {len(required_missing)} mediciones obligatorias para enviar la jornada.')
+            with st.expander('Ver campos pendientes por box'):
+                for missing in required_missing:
+                    st.write(missing)
         confirm = st.checkbox('Revisé los datos y sus unidades', key='op_daily_confirm')
         if c2.button('Enviar jornada', type='primary', disabled=not confirm or bool(required_missing), key='op_daily_submit', use_container_width=True):
             save('submitted')
@@ -554,7 +587,20 @@ def _agenda(client, org, user, role, lotes, today):
         return
     data = {'lote_id': lot['id'], 'observed_at': datetime.now(timezone.utc).isoformat(), 'source': 'manual', 'quality': 'observed'}
     memberships = client.table('organization_memberships').select('user_id,role').eq('organization_id', org).execute().data or []
-    members = {'Sin asignar': None, **{f"{m['user_id']} · {m['role']}": m['user_id'] for m in memberships}}
+    profiles = {}
+    for offset in range(0, len(memberships), 100):
+        ids = [member['user_id'] for member in memberships[offset:offset + 100]]
+        try:
+            rows = client.table('user_profiles').select('user_id,full_name,username').in_('user_id', ids).execute().data or []
+            profiles.update({person['user_id']: person for person in rows})
+        except Exception:
+            pass  # Profiles may be scoped to the current account; memberships remain authoritative.
+    members = {'Sin asignar': None}
+    for member in memberships:
+        person = profiles.get(member['user_id'], {})
+        label = person.get('full_name') or person.get('username') or ('Usuario ' + member['user_id'][:8])
+        label += ' · ' + {'owner':'Propietario','admin':'Administrador','operator':'Operador','analyst':'Analista'}.get(member['role'], member['role'])
+        members[label + ' · ' + member['user_id'][:6]] = member['user_id']
     valid = True
     if mode == 'Crear tarea':
         kind = 'task'

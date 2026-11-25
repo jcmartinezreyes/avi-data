@@ -79,3 +79,24 @@ archivos peligrosos, anonimización y reproducibilidad de informes.
   denominador y convención de edad antes de usarlas como comparación.
 - Falta medir usabilidad con operadores reales y validar pronósticos con ciclos
   reales. Las pruebas técnicas no acreditan beneficios comerciales o sanitarios.
+
+## Publicación del 25 de noviembre de 2026
+
+La migración `operational_workflows` se aplicó a Avi-data con versión remota
+`20261125163546`. Su SHA-256 es
+`2a2f9c16b2a0c83590b10e4232cfc484a3698a56d2946f7909d234294974d522`.
+El archivo local conserva la fecha de creación del CLI; la versión del historial
+remoto identifica la aplicación efectiva, no una segunda migración pendiente.
+
+Las 52 pruebas Python pasan. Las pruebas SQL posteriores a aplicar el esquema
+terminaron en `OPERATIONS_POSTAPPLY_TESTS_OK` y se revirtieron. Se conservaron
+60 lotes (10 activos), 2241 diarios y 140 detalles; existen 2241 capturas con su
+primera versión histórica. No quedaron lotes ni eventos de los fixtures.
+Las 14 tablas nuevas tienen RLS; las escrituras directas, también mediante la
+vista de hechos efectivos, se rechazaron con el rol autenticado.
+
+El asesor de seguridad conserva el aviso previo de protección contra contraseñas
+filtradas desactivada: no es una regla de las nuevas tablas. Configuración y alcance:
+https://supabase.com/docs/guides/auth/password-security#password-strength-and-leaked-password-protection
+El asesor de rendimiento solo informó índices todavía sin uso; no se eliminaron
+los índices nuevos antes de que exista carga representativa.
