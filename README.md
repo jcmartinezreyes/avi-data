@@ -72,7 +72,7 @@ Su comprobación reversible está en `tests/phase5_seed_rollback.py`.
 
 ## Centro de operación
 
-El menú **Ingreso diario** abre la jornada por lote. Un día sin captura permanece
+El menú **Jornada** abre la captura por lote. Un día sin captura permanece
 pendiente; guardar un borrador no incorpora sus valores a los indicadores. Los
 ceros medidos se distinguen de campos sin medición. El envío sigue siendo una
 transacción con todos los boxes; los pesos son opcionales. Una modificación exige
@@ -119,3 +119,17 @@ con el esquema aplicado y se ejecuta con rollback: crea datos sintéticos aislad
 comprueba permisos y balances y no debe ejecutarse como una carga de producción.
 Las planillas de `avilab/referencias/` permanecen privadas y están excluidas del
 versionado. AviLab sigue bajo activación manual, sin ejecuciones programadas.
+
+## Interfaz orientada al trabajo diario
+
+Inicio ofrece accesos a Registrar jornada, Ver agenda y Comparar lotes según el
+perfil. La navegación lateral identifica la página activa; Centro de operación
+muestra sus siete áreas como opciones visibles. Jornada reúne lote, fecha y
+estado, abre el primer box pendiente y muestra avance real sin completar ceros.
+La recuperación, el historial y los detalles técnicos permanecen en paneles
+secundarios. En móvil los campos se apilan y los controles principales mantienen
+44 píxeles de alto.
+
+La investigación y evaluación de esta entrega están en
+`avilab/resultados/2026-11-28_interfaz_moderna/`. La revisión con usuarios reales
+sigue siendo necesaria para medir facilidad de uso y tiempos de operación.

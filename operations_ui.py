@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 import pandas as pd
 import streamlit as st
+from ui_design import context_card, section_intro, workflow_steps
 
 MANAGERS = {'owner', 'admin'}
 WRITERS = {'owner', 'admin', 'operator'}
@@ -48,9 +49,9 @@ def _rows(client, table, organization_id, **filters):
     return result
 
 
-def _table(rows, columns=None):
+def _table(rows, columns=None, empty_title="Aún no hay registros", empty_description="Los datos aparecerán aquí cuando se registren en esta sección.", empty_action=None):
     if not rows:
-        st.info('Todavía no hay registros en esta vista.')
+        st.info(empty_title + '. ' + empty_description + (' ' + empty_action if empty_action else ''))
         return
     frame = pd.DataFrame(rows)
     if columns:
@@ -140,6 +141,8 @@ def _record(client, org, kind, data, key):
 def _number(label, key, integer=False, optional=False, value=None):
     options = {'label': label, 'min_value': 0 if integer else 0.0, 'key': key}
     options['value'] = value if value is not None else (None if optional else (0 if integer else 0.0))
+    if optional:
+        options['placeholder'] = 'Sin medir'
     if integer:
         options['step'] = 1
     else:
@@ -183,21 +186,37 @@ def _load_draft(org, user, lot_id, day):
 
 
 def _jornada(client, org, user, role, lotes, today):
-    st.subheader('Tu jornada, con cada dato en su lugar')
+    section_intro('Completa tu jornada', 'Elige el lote, registra lo observado y revisa los datos antes de enviarlos.')
     captures = _rows(client, 'daily_captures', org)
     active = [l for l in lotes if l.get('activo') and str(l.get('fecha_encaste', '')) <= str(today)]
     summary = []
-    for lot in active:
-        capture = next((c for c in captures if c['lote_id'] == lot['id'] and str(c['fecha']) == str(today)), None)
-        summary.append({'Lote': lot.get('codigo_lote'), 'Fecha': str(today), 'Estado': STATUS.get(capture['status'], capture['status']) if capture else 'Pendiente'})
-    _table(summary)
+    for item in active:
+        capture = next((c for c in captures if c['lote_id'] == item['id'] and str(c['fecha']) == str(today)), None)
+        summary.append({'Lote': item.get('codigo_lote'), 'Fecha': str(today),
+                        'Estado': STATUS.get(capture['status'], capture['status']) if capture else 'Pendiente'})
+    pending = sum(row['Estado'] == 'Pendiente' for row in summary)
+    drafts = sum(row['Estado'] == 'Borrador' for row in summary)
+    sent = len(summary) - pending - drafts
+    summary_items = [('Por registrar hoy', pending), ('En borrador', drafts), ('Jornadas enviadas', sent)]
+    st.markdown('<dl class="avi-day-summary" aria-label="Estado de las jornadas de hoy">'
+        + ''.join('<div><dt>' + title + '</dt><dd>' + str(amount) + '</dd></div>' for title, amount in summary_items)
+        + '</dl>', unsafe_allow_html=True)
+    with st.expander('Ver el estado de todos los lotes de hoy'):
+        _table(summary, empty_title='No hay lotes en producción',
+               empty_description='Los lotes activos aparecerán aquí desde su fecha de alojamiento.',
+               empty_action='Revisa tus alojamientos en el menú Lotes.')
     historic = st.checkbox('Consultar o corregir un período de un lote cerrado', key='op_daily_historic') if role in MANAGERS else False
     candidates = lotes if historic else active
-    lot = _lot_picker(candidates, 'op_daily_lot', active=not historic)
+    context_columns = st.columns([2, 1])
+    with context_columns[0]:
+        lot = _lot_picker(candidates, 'op_daily_lot', active=not historic)
     if not lot:
         return
     default_day = min(today, date.fromisoformat(str(lot['fecha_cierre'])[:10])) if lot.get('fecha_cierre') else today
-    day = st.date_input('Fecha de la jornada', default_day, min_value=date.fromisoformat(str(lot['fecha_encaste'])[:10]), max_value=default_day, key=f'op_daily_date_{lot["id"]}')
+    with context_columns[1]:
+        day = st.date_input('Fecha de la jornada', default_day,
+            min_value=date.fromisoformat(str(lot['fecha_encaste'])[:10]), max_value=default_day,
+            key=f'op_daily_date_{lot["id"]}')
     previous = next((c for c in captures if c['lote_id'] == lot['id'] and str(c['fecha']) == str(day)), {})
     edit_key = f'op_capture_loaded_{org}_{lot["id"]}_{day}'
     if edit_key not in st.session_state:
@@ -205,19 +224,22 @@ def _jornada(client, org, user, role, lotes, today):
     pinned = st.session_state[edit_key]
     if previous.get('version', 0) != pinned.get('version', 0):
         st.warning('Existe una versión más reciente. Tu edición conserva la versión de origen para evitar sobrescribir cambios ajenos.')
-    if st.button('Recargar versión actual', key='op_daily_reload'):
-        st.session_state.pop(edit_key, None)
-        st.rerun()
     previous = pinned
     version = previous.get('version', 0)
+    farm = (lot.get('galpones') or {}).get('granjas') or {}
+    age = (day - date.fromisoformat(str(lot['fecha_encaste'])[:10])).days + 1
+    status = STATUS.get(previous.get('status'), 'Pendiente')
+    context_card(lot.get('codigo_lote', str(lot['id'])),
+        f"{farm.get('nombre', 'Granja sin nombre')} · {(lot.get('galpones') or {}).get('nombre', 'Galpón')} · {lot.get('tipo_produccion', 'engorde').capitalize()} · {day.strftime('%d/%m/%Y')} · Día {age}",
+        status=status, tone='pending' if status in ('Pendiente', 'Borrador') else 'success')
     if previous.get('source') == 'legacy':
         st.warning('Registro histórico: se conservaron los valores originales, pero su estado de medición no está documentado. Un cero antiguo no acredita por sí solo que se haya medido. Revisa la fuente antes de corregir o confirmar.')
-    st.caption(f"{lot.get('tipo_produccion', 'engorde').capitalize()} · Día {(day-date.fromisoformat(str(lot['fecha_encaste'])[:10])).days+1} · Versión {version} · {STATUS.get(previous.get('status'), 'Pendiente')}")
     boxes = client.table('galpon_boxes').select('*').eq('lote_id', lot['id']).order('nombre_box').execute().data or []
     if not boxes:
-        st.warning('Este lote necesita al menos un box configurado antes de capturar datos.')
+        st.info('Configura los boxes de este lote en el menú Lotes para comenzar la jornada.')
         return
-    restored = _load_draft(org, user, lot['id'], day)
+    with st.expander('Recuperar un borrador de respaldo'):
+        restored = _load_draft(org, user, lot['id'], day)
     prior_boxes = (restored or {}).get('boxes', previous.get('payload') or [])
     if isinstance(prior_boxes, dict):
         prior_boxes = prior_boxes.get('boxes', [])
@@ -236,115 +258,202 @@ def _jornada(client, org, user, role, lotes, today):
             totals = net_by_box.setdefault(str(box_id), [0, 0])
             totals[0] += sign * (event.get('quantity_female') or 0)
             totals[1] += sign * (event.get('quantity_male') or 0)
-    payload = []
-    required_missing = []
     readonly = role not in WRITERS or previous.get('status') in ('reviewed', 'closed') or (not lot.get('activo') and not previous)
-    st.caption('Un campo vacío significa no medido. Cero significa una medición de cero. Los borradores no entran en los indicadores.')
+    st.caption('Vacío = no medido. Cero = cero observado. El sexo ausente queda como No aplica. Los pesos son opcionales.')
+
+    def absent_sex(box, sex):
+        moved_h, moved_m = net_by_box.get(str(box['id']), [0, 0])
+        return (sex == 'h' and not box.get('aves_hembra_inicial') and moved_h == 0) or (sex == 'm' and not box.get('aves_macho_inicial') and moved_m == 0)
+
+    def input_key(box, code):
+        key = f'op_daily_{lot["id"]}_{day}_{version}_{box["id"]}_{code}'
+        if restored:
+            key += '_' + hashlib.sha256(json.dumps(restored, sort_keys=True).encode()).hexdigest()[:8]
+        return key
+
+    box_progress = {}
     for box in boxes:
         prior = defaults.get(str(box['id']), {})
-        with st.expander(box.get('nombre_box', str(box['id'])), expanded=len(boxes) == 1):
+        required = [code for code, _, kind, sex in FIELDS if kind != 'weight' and not absent_sex(box, sex)]
+        complete = sum((prior.get(code) if readonly else st.session_state.get(input_key(box, code), prior.get(code))) is not None for code in required)
+        box_progress[box['id']] = (complete, len(required))
+    first_pending = next((box['id'] for box in boxes if box_progress[box['id']][0] < box_progress[box['id']][1]), None)
+    workflow_steps(['Lote y fecha', 'Datos por box', 'Revisar y enviar'], current=1 if first_pending is not None else 2)
+    payload, required_missing = [], []
+    for box in boxes:
+        prior = defaults.get(str(box['id']), {})
+        complete, required_total = box_progress[box['id']]
+        with st.expander(f"{box.get('nombre_box', str(box['id']))} · {complete}/{required_total} datos",
+                         expanded=len(boxes) == 1 or box['id'] == first_pending):
             row = {'box_id': box['id'], 'metricas': prior.get('metricas', [])}
             states = {}
-            not_applicable = []
-            st.caption('El sexo ausente queda como No aplica. Para un pesaje no realizado usa la opción de peso desactivada; no se inventa un cero.')
-            show_weights = st.checkbox('Registrar peso medio tomado hoy · opcional',
-                value=any(prior.get(f[0]) is not None for f in FIELDS if f[2] == 'weight'),
-                key=f'op_daily_weights_{lot["id"]}_{day}_{version}_{box["id"]}', disabled=readonly)
-            for code, label, kind, sex in FIELDS:
-                moved_h, moved_m = net_by_box.get(str(box['id']), [0, 0])
-                absent = (sex == 'h' and not box.get('aves_hembra_inicial') and moved_h == 0) or (sex == 'm' and not box.get('aves_macho_inicial') and moved_m == 0)
-                if not absent and kind != 'weight' and code in not_applicable:
-                    required_missing.append(box.get('nombre_box', str(box['id'])) + ' · ' + label)
-                if absent or code in not_applicable:
-                    row[code] = None
-                    states[code] = 'not_applicable'
-                    continue
-                if kind == 'weight' and not show_weights:
-                    row[code] = None
-                    states[code] = 'not_measured'
-                    continue
+
+            def capture_field(field, container):
+                code, label, kind, sex = field
+                if absent_sex(box, sex):
+                    row[code], states[code] = None, 'not_applicable'
+                    return
                 value = prior.get(code)
-                key = f'op_daily_{lot["id"]}_{day}_{version}_{box["id"]}_{code}'
-                if restored:
-                    key += '_' + hashlib.sha256(json.dumps(restored, sort_keys=True).encode()).hexdigest()[:8]
                 if readonly:
-                    st.write(f'{label}: {value if value is not None else "No medido"}')
+                    container.write(f'{label}: {value if value is not None else "No medido"}')
                     row[code] = value
                 else:
-                    row[code] = _number(label, key, integer=kind == 'count', optional=True, value=value)
+                    with container:
+                        row[code] = _number(label, input_key(box, code), integer=kind == 'count', optional=True, value=value)
                 states[code] = 'measured' if row[code] is not None else 'not_measured'
                 if kind != 'weight' and row[code] is None:
                     required_missing.append(box.get('nombre_box', str(box['id'])) + ' · ' + label)
+
+            st.markdown('**Bajas de aves**')
+            loss_fields = [field for field in FIELDS[:4] if not absent_sex(box, field[3])]
+            loss_columns = st.columns(2)
+            for index, field in enumerate(loss_fields):
+                capture_field(field, loss_columns[index % 2])
+            for field in FIELDS[:4]:
+                if absent_sex(box, field[3]):
+                    row[field[0]], states[field[0]] = None, 'not_applicable'
+            st.markdown('**Consumo del día**')
+            for field, container in zip(FIELDS[4:6], st.columns(2)):
+                capture_field(field, container)
+            show_weights = st.checkbox('Registrar peso medio tomado hoy · opcional',
+                value=any(prior.get(field[0]) is not None for field in FIELDS if field[2] == 'weight'),
+                key=f'op_daily_weights_{lot["id"]}_{day}_{version}_{box["id"]}', disabled=readonly)
+            weight_columns = st.columns(2) if show_weights else []
+            for index, field in enumerate(FIELDS[6:]):
+                if absent_sex(box, field[3]):
+                    row[field[0]], states[field[0]] = None, 'not_applicable'
+                elif show_weights:
+                    capture_field(field, weight_columns[index])
+                else:
+                    row[field[0]], states[field[0]] = None, 'not_measured'
             row['measurement_states'] = states
             payload.append(row)
-    st.markdown('**Revisión antes de enviar**')
+    required_total = sum(total for _, total in box_progress.values())
+    completed_total = required_total - len(required_missing)
+    st.progress(completed_total / required_total if required_total else 1.0,
+                text=f"{completed_total} de {required_total} datos obligatorios listos · {len(boxes)} {'box' if len(boxes) == 1 else 'boxes'}")
+    st.markdown('**Resumen de la jornada**')
+
+    def observed_total(fields):
+        fields = tuple(fields)
+        values = []
+        for box_row in payload:
+            for code in fields:
+                if box_row['measurement_states'].get(code) == 'not_applicable':
+                    continue
+                if box_row.get(code) is None:
+                    return None
+                values.append(box_row[code])
+        return sum(values) if values else None
+
+    totals = [('Muertas', observed_total(FIELDS[i][0] for i in (0, 1)), 'aves'),
+              ('Descartes', observed_total(FIELDS[i][0] for i in (2, 3)), 'aves'),
+              ('Alimento', observed_total(['consumo_alimento_kg']), 'kg'),
+              ('Agua', observed_total(['consumo_agua_litros']), 'L')]
+    for column, (label, value, unit) in zip(st.columns(4), totals):
+        column.metric(label, 'Pendiente' if value is None else f'{value:,.1f} {unit}' if unit != 'aves' else f'{int(value):,} aves')
     box_names = {box['id']: box.get('nombre_box', str(box['id'])) for box in boxes}
-    _table([{k: (box_names.get(v, v) if k == 'box_id' else v) for k, v in b.items() if k not in ('metricas', 'measurement_states')} for b in payload])
-    _download_draft(org, user, lot['id'], day, payload, version)
-    reason = st.text_input('Observación o motivo de corrección', key=f'op_daily_reason_{lot["id"]}_{day}')
+    relevant_fields = [code for code, _, _, _ in FIELDS if not all(row['measurement_states'].get(code) == 'not_applicable' for row in payload)]
+    with st.expander('Revisar el detalle por box antes de enviar'):
+        _table([{key: (box_names.get(value, value) if key == 'box_id' else value) for key, value in row.items()
+                 if key == 'box_id' or key in relevant_fields} for row in payload])
+    reason = st.text_input('Observación o motivo de corrección', key=f'op_daily_reason_{lot["id"]}_{day}',
+                           help='Obligatorio al corregir datos enviados o reabrir un período.')
+
     def save(status):
         result = _rpc(client, 'save_daily_capture', {'p_lote_id': lot['id'], 'p_fecha': str(day),
-                       'p_boxes': previous.get('payload', payload) if status in ('reviewed', 'closed', 'reopen') else payload, 'p_status': status, 'p_expected_version': (restored or {}).get('version', version),
+                       'p_boxes': previous.get('payload', payload) if status in ('reviewed', 'closed', 'reopen') else payload,
+                       'p_status': status, 'p_expected_version': (restored or {}).get('version', version),
                        'p_reason': reason, 'p_source': 'manual', 'p_external_id': None})
         if result:
             st.session_state.pop(edit_key, None)
-            st.success('Jornada guardada.')
+            st.session_state['op_daily_notice'] = 'Borrador guardado. Puedes continuar más tarde.' if status == 'draft' else 'Jornada actualizada correctamente. Se conserva su historial de cambios.'
             st.rerun()
+
     if not readonly:
-        c1, c2 = st.columns(2)
-        if c1.button('Guardar borrador', key='op_daily_save', use_container_width=True):
-            save('draft')
         if required_missing:
-            st.info(f'Puedes guardar el borrador. Faltan {len(required_missing)} mediciones obligatorias para enviar la jornada.')
-            with st.expander('Ver campos pendientes por box'):
+            st.info(f'Faltan {len(required_missing)} datos obligatorios. Puedes guardar un borrador y completarlo después.')
+            with st.expander('Ver los datos que faltan'):
                 for missing in required_missing:
                     st.write(missing)
+        confirm_context = (org, lot['id'], str(day), version, (restored or {}).get('version'))
+        if st.session_state.get('op_daily_confirm_context') != confirm_context:
+            st.session_state.pop('op_daily_confirm', None)
+            st.session_state['op_daily_confirm_context'] = confirm_context
         confirm = st.checkbox('Revisé los datos y sus unidades', key='op_daily_confirm')
-        if c2.button('Enviar jornada', type='primary', disabled=not confirm or bool(required_missing), key='op_daily_submit', use_container_width=True):
+        submit_column, draft_column = st.columns([2, 1])
+        if submit_column.button('Enviar jornada', type='primary', disabled=not confirm or bool(required_missing), key='op_daily_submit', use_container_width=True):
             save('submitted')
+        if draft_column.button('Guardar borrador', key='op_daily_save', use_container_width=True):
+            save('draft')
     if role in MANAGERS and previous:
-        c1, c2, c3 = st.columns(3)
-        if c1.button('Marcar revisado', disabled=previous.get('status') != 'submitted', key='op_review'):
-            save('reviewed')
-        if c2.button('Cerrar período', disabled=previous.get('status') != 'reviewed', key='op_period_close'):
-            save('closed')
-        if c3.button('Reabrir para corregir', disabled=previous.get('status') not in ('reviewed', 'closed') or not reason.strip(), key='op_period_reopen'):
-            save('reopen')
+        with st.expander('Revisión y cierre del período'):
+            st.caption(f'Versión {version} · {status}. La revisión se aplica a los datos guardados: envía los cambios del formulario antes de revisar. Los períodos revisados necesitan reapertura para corregirlos.')
+            c1, c2, c3 = st.columns(3)
+            if c1.button('Marcar revisado', disabled=previous.get('status') != 'submitted', key='op_review'):
+                save('reviewed')
+            if c2.button('Cerrar período', disabled=previous.get('status') != 'reviewed', key='op_period_close'):
+                save('closed')
+            if c3.button('Reabrir para corregir', disabled=previous.get('status') not in ('reviewed', 'closed') or not reason.strip(), key='op_period_reopen'):
+                save('reopen')
+    with st.expander('Trabajar sin conexión y descargar respaldo'):
+        _download_draft(org, user, lot['id'], day, payload, version)
     with st.expander('Historial de versiones y responsables'):
         if previous:
             versions = _rows(client, 'daily_capture_versions', org, capture_id=previous['id'])
             _table(versions, ['version', 'status', 'reason', 'created_by', 'created_at', 'payload'])
         else:
-            st.caption('Aún no hay versiones de esta jornada.')
+            st.caption('Las versiones aparecerán aquí después de guardar tu primera jornada.')
+    with st.expander('Recargar datos si otra persona está editando'):
+        st.caption('Recargar descarta los cambios de esta edición y trae la última versión guardada.')
+        if st.button('Recargar versión actual', key='op_daily_reload'):
+            st.session_state.pop(edit_key, None)
+            prefixes = (f'op_daily_{lot["id"]}_{day}_', f'op_daily_weights_{lot["id"]}_{day}_')
+            for widget_key in list(st.session_state):
+                if widget_key.startswith(prefixes):
+                    st.session_state.pop(widget_key, None)
+            st.session_state.pop('op_daily_confirm', None)
+            st.session_state.pop('op_daily_confirm_context', None)
+            st.rerun()
+
+def _provenance_fields(data, key):
+    with st.expander('Origen y calidad del dato · opciones adicionales'):
+        st.caption('El ingreso habitual es manual y observado. Cambia estas opciones solo si corresponde al origen real.')
+        data['source'] = st.selectbox('Procedencia', ['manual', 'import', 'sensor'],
+            format_func=lambda value: {'manual': 'Manual', 'import': 'Importación verificada', 'sensor': 'Sensor · ingreso manual de lectura'}[value], key=key+'_source')
+        quality = st.selectbox('Calidad', ['observed', 'estimated', 'corrected'],
+            format_func=lambda value: {'observed': 'Medido / observado', 'estimated': 'Estimado', 'corrected': 'Corregido con motivo'}[value], key=key+'_quality')
+        data['quality'] = 'corrected' if data.get('supersedes_id') else quality
+        data['external_id'] = st.text_input('Identificador del origen · opcional', key=key+'_external') or None
+        if data.get('supersedes_id'):
+            st.caption('Este registro es una corrección: conservará el vínculo al original y requiere un motivo.')
 
 
-def _event_context(client, lotes, today, key, active=True):
+def _event_context(client, lotes, today, key, active=True, include_provenance=True):
     lot = _lot_picker(lotes, key + '_lot', active=active)
     if not lot:
         return None
     boxes = client.table('galpon_boxes').select('*').eq('lote_id', lot['id']).order('nombre_box').execute().data or []
     options = {'Todo el lote / galpón': None, **{b['nombre_box']: b['id'] for b in boxes}}
     box = options[st.selectbox('Alcance', list(options), key=key+'_box')]
-    day = st.date_input('Fecha observada', today, max_value=today, key=key+'_date')
-    clock = st.time_input('Hora observada · Colombia', value=datetime.now(ZoneInfo('America/Bogota')).time().replace(tzinfo=None), key=key+'_time')
-    data = {'lote_id': lot['id'], 'box_id': box, 'observed_at': f'{day}T{clock.isoformat()}-05:00'}
-    data['source'] = st.selectbox('Procedencia', ['manual', 'import', 'sensor'],
-                                   format_func=lambda s: {'manual': 'Manual', 'import': 'Importación verificada', 'sensor': 'Sensor · ingreso manual de lectura'}[s], key=key+'_source')
-    data['quality'] = st.selectbox('Calidad', ['observed', 'estimated', 'corrected'],
-                                    format_func=lambda s: {'observed': 'Medido / observado', 'estimated': 'Estimado', 'corrected': 'Corregido con motivo'}[s], key=key+'_quality')
-    data['external_id'] = st.text_input('Identificador del origen · opcional', key=key+'_external') or None
+    date_column, time_column = st.columns(2)
+    day = date_column.date_input('Fecha observada', today, max_value=today, key=key+'_date')
+    clock = time_column.time_input('Hora observada · Colombia', value=datetime.now(ZoneInfo('America/Bogota')).time().replace(tzinfo=None), key=key+'_time')
+    data = {'lote_id': lot['id'], 'box_id': box, 'observed_at': f'{day}T{clock.isoformat()}-05:00',
+            'source': 'manual', 'quality': 'observed', 'external_id': None}
+    if include_provenance:
+        _provenance_fields(data, key)
     return lot, boxes, data
 
 
 def _events(client, org, user, role, lotes, today):
     from avilab_domain import sample_statistics, feed_inventory
-    st.subheader('Registrar el hecho una sola vez')
-    st.caption('Pesajes, movimientos y manejo conservan fecha efectiva, alcance y procedencia. No vuelvas a sumar estos hechos como una segunda captura del mismo consumo.')
+    section_intro('Registra un evento productivo', 'Elige qué ocurrió y dónde. Los pesajes, movimientos y observaciones conservan su propia historia.')
     choices = {'Pesaje de muestra': 'weighing', 'Movimiento de aves': 'bird_movement', 'Contador de agua': 'water_reading',
                'Inventario de alimento': 'feed_movement', 'Ambiente del galpón': 'environment', 'Sanidad y observaciones': 'health',
                'Cambio de etapa': 'stage', 'Preparación del galpón': 'readiness', 'Recepción de aves': 'arrival'}
     kind = choices[st.selectbox('Tipo de evento', list(choices), key='op_event_kind')]
-    context = _event_context(client, lotes, today, 'op_event')
+    context = _event_context(client, lotes, today, 'op_event', include_provenance=False)
     if not context:
         return
     lot, boxes, data = context
@@ -433,6 +542,7 @@ def _events(client, org, user, role, lotes, today):
         data['expected'] = _number('Aves previstas', 'op_arrival_expected', integer=True)
         data['received'] = _number('Aves recibidas', 'op_arrival_received', integer=True)
         st.caption('Recepción documental vinculada al alojamiento. No duplica las aves iniciales del lote. Para ingresos adicionales usa Movimiento de aves.')
+    _provenance_fields(data, 'op_event')
     data['note'] = st.text_area('Observación / motivo', key='op_event_note')
     if data.get('quality') == 'corrected' and not data['note'].strip():
         valid = False
@@ -447,7 +557,7 @@ def _events(client, org, user, role, lotes, today):
 
 
 def _eggs(client, org, user, role, lotes, today):
-    st.subheader('Del origen del huevo al nacimiento')
+    section_intro('Huevos e incubación', 'Sigue cada unidad desde su recolección o recepción hasta el despacho o nacimiento.')
     choices = {'Recolección por ronda': 'egg_collection', 'Recibir huevos de origen externo': 'egg_receipt', 'Clasificar una unidad': 'egg_classification',
                'Mover huevos entre etapas': 'egg_transfer', 'Dividir unidad': 'egg_split', 'Combinar unidades': 'egg_merge',
                'Cargar incubadora': 'hatch_set', 'Transferir tanda': 'hatch_transfer', 'Registrar nacimiento y muestra': 'hatch_result'}
@@ -572,7 +682,7 @@ def _eggs(client, org, user, role, lotes, today):
 
 
 def _agenda(client, org, user, role, lotes, today):
-    st.subheader('Lo pendiente tiene responsable y evidencia')
+    section_intro('Tu agenda de producción', 'Organiza los pendientes, asigna responsables y da seguimiento a cada incidencia.')
     tasks = _rows(client, 'operation_tasks', org)
     incidents = _rows(client, 'operation_incidents', org)
     open_tasks = [t for t in tasks if t.get('status') == 'open']
@@ -667,6 +777,7 @@ def _agenda(client, org, user, role, lotes, today):
                 st.session_state.pop('op_task_version_' + data['task_id'], None)
             if kind == 'incident_update':
                 st.session_state.pop('op_incident_version_' + data['incident_id'], None)
+            st.session_state['op_notice'] = 'Seguimiento guardado. La agenda muestra el estado actualizado.'
             st.rerun()
     st.markdown('**Agenda de la organización**')
     _table(tasks, ['title', 'lote_id', 'due_date', 'assigned_to', 'status', 'evidence_event_id'])
@@ -676,7 +787,8 @@ def _agenda(client, org, user, role, lotes, today):
 
 def _importer(client, org, user, role, lotes, today):
     from import_tools import inspect_upload, preview_import, UNIT_TARGETS
-    st.subheader('Primero interpretar la planilla; después confirmar')
+    section_intro('Importa una planilla con confianza', 'Carga el archivo, relaciona sus columnas y revisa el resultado antes de guardarlo.')
+    workflow_steps(['Elegir archivo', 'Relacionar columnas', 'Revisar y confirmar'], current=0)
     st.caption('Solo se leen CSV y XLSX. No se ejecutan macros, fórmulas ni vínculos externos. Los resúmenes semanales quedan pendientes y no se convierten en días inventados.')
     example = 'lote_id,box_id,fecha,event_type,source_event_id,count,temperature_c,humidity_pct\n1,1,2026-11-25,egg_collection,ronda-1,100,,\n'
     st.download_button('Plantilla de ejemplo · sintética · reemplazar identidades', example, file_name='avidata-ejemplo-sintetico.csv', mime='text/csv', key='op_import_example')
@@ -694,19 +806,35 @@ def _importer(client, org, user, role, lotes, today):
     fields = ['lote_id', 'box_id', 'fecha', 'event_type', 'source_event_id', 'count', 'temperature_c', 'humidity_pct',
               'mortalidad_hembra', 'mortalidad_macho', 'descarte_hembra', 'descarte_macho', 'consumo_alimento_kg',
               'consumo_agua_litros', 'peso_promedio_hembra_g', 'peso_promedio_macho_g']
-    labels = {'lote_id': 'ID del lote', 'box_id': 'ID del box', 'fecha': 'Fecha efectiva', 'event_type': 'Tipo de evento', 'source_event_id': 'ID de la fila / ronda en el origen', 'count': 'Cantidad de huevos · unidades'}
+    labels = {**{code: label for code, label, _, _ in FIELDS},
+              'lote_id': 'ID del lote', 'box_id': 'ID del box', 'fecha': 'Fecha efectiva',
+              'event_type': 'Tipo de evento', 'source_event_id': 'ID de fila / ronda en el origen',
+              'count': 'Cantidad de huevos · unidades', 'temperature_c': 'Temperatura · °C',
+              'humidity_pct': 'Humedad relativa · %'}
     mapping, units = {}, {}
-    with st.expander('Asignar columnas y unidades', expanded=True):
-        for field in fields:
-            columns = ['Sin asignar'] + inspected['columns']
-            index = columns.index(field) if field in columns else 0
-            selection = st.selectbox(labels.get(field, field.replace('_', ' ').capitalize()), columns, index=index, key='op_import_map_'+field)
-            if selection != 'Sin asignar':
-                mapping[field] = selection
-                if field in UNIT_TARGETS:
-                    units[field] = st.selectbox('Unidad en el archivo · '+field, list(UNIT_TARGETS[field][1]), key='op_import_unit_'+field)
-    period = st.selectbox('Frecuencia real del origen', ['daily', 'weekly', 'summary'], format_func=lambda x: {'daily': 'Filas diarias / eventos', 'weekly': 'Resumen semanal', 'summary': 'Totales / resumen'}[x], key='op_import_period')
-    date_format = st.selectbox('Formato de fecha del archivo', ['ISO (AAAA-MM-DD)', '%d/%m/%Y', '%m/%d/%Y'], key='op_import_dateformat')
+    st.caption('Asigna identidad y fecha primero. Abre solo los grupos que correspondan a tu planilla; los campos sin asignar no se importan.')
+    groups = [
+        ('1 · Lote, box y fecha', ['lote_id', 'box_id', 'fecha'], True),
+        ('2 · Muertas, descartes y consumos', fields[8:14], True),
+        ('Pesos opcionales', fields[14:], False),
+        ('Recolecciones, ambiente y origen de los eventos', fields[3:8], False),
+    ]
+    for title, group, expanded in groups:
+        with st.expander(title, expanded=expanded):
+            containers = st.columns(2)
+            for index_in_group, field in enumerate(group):
+                with containers[index_in_group % 2]:
+                    columns = ['Sin asignar'] + inspected['columns']
+                    index = columns.index(field) if field in columns else 0
+                    selection = st.selectbox(labels.get(field, field), columns, index=index, key='op_import_map_'+field)
+                    if selection != 'Sin asignar':
+                        mapping[field] = selection
+                        if field in UNIT_TARGETS:
+                            units[field] = st.selectbox('Unidad de origen · '+labels.get(field, field),
+                                list(UNIT_TARGETS[field][1]), key='op_import_unit_'+field)
+    format_columns = st.columns(2)
+    period = format_columns[0].selectbox('Frecuencia real del origen', ['daily', 'weekly', 'summary'], format_func=lambda x: {'daily': 'Filas diarias / eventos', 'weekly': 'Resumen semanal', 'summary': 'Totales / resumen'}[x], key='op_import_period')
+    date_format = format_columns[1].selectbox('Formato de fecha del archivo', ['ISO (AAAA-MM-DD)', '%d/%m/%Y', '%m/%d/%Y'], key='op_import_dateformat')
     st.caption('Revisa el significado: mortalidad son muertas; descartes van por separado. Un contador acumulado de agua no se importa como consumo diario. ID de lote y box deben corresponder a tu organización.')
     existing = _rows(client, 'effective_operations_events', org)
     keys = [e.get('external_id') for e in existing if e.get('external_id')]
@@ -772,7 +900,7 @@ def _flatten_event(event):
 
 
 def _trace(client, org, user, role, lotes, today):
-    st.subheader('Investigar, comparar y compartir con contexto')
+    section_intro('Explora tu producción', 'Consulta el ciclo, revisa existencias y comparte informes con sus datos de respaldo.')
     mode = st.selectbox('Herramienta', ['Cronología del ciclo', 'Inventario y cobertura de alimento', 'Identidad y QR', 'Objetivos versionados', 'Plan y pronóstico', 'Informe reproducible de ciclo'], index=2 if st.query_params.get('trace') else 0, key='op_trace_mode')
     lot = _lot_picker(lotes, 'op_trace_lot')
     if not lot:
@@ -977,8 +1105,7 @@ def _snapshots(client, org, role, lot, today):
 
 
 def _onboarding(client, org, user, role, lotes, today):
-    st.subheader('Configurar con una revisión antes del primer dato')
-    st.caption('Este recorrido revisa tu configuración y permite practicar con datos sintéticos. No crea información real sin confirmación.')
+    section_intro('Prepara tu primera jornada', 'Revisa la estructura de tu organización y practica con un ejemplo antes de registrar datos reales.')
     organization = client.table('organizations').select('name').eq('id', org).execute().data or []
     farms = client.table('granjas').select('id,nombre').eq('organization_id', org).execute().data or []
     st.markdown('**1 · Organización y estructura**')
@@ -1008,14 +1135,23 @@ def _onboarding(client, org, user, role, lotes, today):
 
 def render_operations(supabase, organization_id, user_id, role, lotes, today, initial_section=None):
     """Render the operational area without changing the caller's authentication."""
-    st.markdown('### Centro de operación')
-    st.caption('Captura confiable · Trazabilidad del ciclo · Decisiones con cobertura visible')
     if isinstance(today, datetime):
         today = today.date()
     if initial_section:
         section = initial_section
     else:
-        section = st.selectbox('Espacio de trabajo', SECTIONS, key='op_workspace_section')
+        labels = {'Jornada': 'Jornada', 'Eventos productivos': 'Eventos', 'Huevos e incubación': 'Huevos e incubación',
+                  'Agenda e incidencias': 'Agenda', 'Importar planillas': 'Importar',
+                  'Trazabilidad y análisis': 'Trazabilidad', 'Configuración guiada': 'Primeros pasos'}
+        if st.session_state.get('op_workspace_section') not in SECTIONS:
+            st.session_state['op_workspace_section'] = SECTIONS[0]
+        with st.container(key='operation_navigation'):
+            section = st.pills('Espacio de trabajo', SECTIONS, selection_mode='single', required=True,
+                               format_func=labels.get, key='op_workspace_section', wrap=True) or SECTIONS[0]
+    notice = st.session_state.pop('op_daily_notice', None)
+    operation_notice = st.session_state.pop('op_notice', None)
+    if notice or operation_notice:
+        st.success(notice or operation_notice)
     renderers = {'Jornada': _jornada, 'Eventos productivos': _events, 'Huevos e incubación': _eggs,
                  'Agenda e incidencias': _agenda, 'Importar planillas': _importer,
                  'Trazabilidad y análisis': _trace, 'Configuración guiada': _onboarding}

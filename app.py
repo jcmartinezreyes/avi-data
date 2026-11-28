@@ -1,6 +1,7 @@
 import os
 from analytics import build_production_series
 from operations_ui import render_operations
+from ui_design import get_theme_css
 import json
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
@@ -20,91 +21,10 @@ st.set_page_config(
     page_title="AviData · Gestión avícola",
     page_icon="🐓",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",
 )
 
-st.markdown(
-    """
-    <style>
-    :root {
-      --avi-forest: #174EA6;
-      --avi-green: #0B57D0;
-      --avi-mint: #DDEAFF;
-      --avi-ink: #1F2937;
-      --avi-muted: #46566C;
-      --avi-line: #D8E2F0;
-      --avi-paper: #FFFFFF;
-      --avi-bg: #F8FAFD;
-    }
-    .stApp { background: var(--avi-bg); color: var(--avi-ink); }
-    [data-testid="stHeader"] { background: var(--avi-bg); }
-    [data-testid="stSidebar"] { background: #EDF3FC; border-right: 1px solid var(--avi-line); }
-    [data-testid="stSidebar"] .stButton > button { border-radius: 20px; background: #F8FAFD; }
-    [data-testid="stSidebar"] .stButton > button:hover { background: #DDEAFF; }
-    [data-testid="stAppViewContainer"] [data-baseweb="input"],
-    [data-testid="stAppViewContainer"] [data-baseweb="select"] > div {
-      background-color: #EDF3FC; color: #1F2937;
-    }
-    [data-testid="stAppViewContainer"] input { color: #1F2937; -webkit-text-fill-color: #1F2937; }
-    .avi-scroll-table {
-      height: 320px; overflow: auto; border: 1px solid var(--avi-line);
-      border-radius: 16px; background: var(--avi-paper);
-    }
-    .avi-scroll-table table { margin: 0; width: 100%; border-collapse: separate; border-spacing: 0; }
-    .avi-scroll-table th, .avi-scroll-table td {
-      padding: .65rem .85rem; border: 0; border-bottom: 1px solid var(--avi-line); text-align: left;
-    }
-    .avi-scroll-table thead th { position: sticky; top: 0; background: #EDF3FC; z-index: 1; }
-    .avi-scroll-table tbody tr:nth-child(even) { background: #F8FAFD; }
-    .block-container { padding-top: 2.1rem; padding-bottom: 3rem; max-width: 1500px; }
-    h1, h2, h3 { color: var(--avi-ink); letter-spacing: -.025em; }
-    h1 { font-size: clamp(1.8rem, 3vw, 2.5rem) !important; font-weight: 700 !important; }
-    h2 { font-size: 1.45rem !important; font-weight: 650 !important; }
-    .avi-brand { font-size: 1.18rem; font-weight: 750; letter-spacing: .02em; color: var(--avi-ink); }
-    .avi-brand small { display:block; margin-top:.15rem; color:var(--avi-muted); font-size:.72rem; font-weight:500; letter-spacing:.08em; text-transform:uppercase; }
-    .avi-side-card {
-      margin:.6rem 0 .8rem; padding:.85rem .9rem; border:1px solid var(--avi-line);
-      border-radius:14px; background:var(--avi-paper);
-    }
-    .avi-side-card .label { color:var(--avi-muted); font-size:.68rem; text-transform:uppercase; letter-spacing:.09em; }
-    .avi-side-card .value { color:var(--avi-ink); font-size:.94rem; font-weight:650; margin-top:.2rem; }
-    .avi-side-card .subvalue { color:var(--avi-muted); font-size:.78rem; margin-top:.14rem; }
-    .avi-hero {
-      display:flex; justify-content:space-between; align-items:flex-end; gap:1rem;
-      margin:0 0 1.5rem; padding:1.35rem 1.55rem; border:1px solid var(--avi-line);
-      border-radius:20px; background:linear-gradient(115deg,#fff 0%,#F4F8FF 65%,#E3EEFF 100%);
-      box-shadow:0 8px 28px rgba(30,55,41,.045);
-    }
-    .avi-hero .eyebrow { margin:0 0 .35rem; color:var(--avi-green); font-size:.72rem; font-weight:700; letter-spacing:.1em; text-transform:uppercase; }
-    .avi-hero h1 { margin:0; color:var(--avi-ink); }
-    .avi-hero .description { margin:.35rem 0 0; color:var(--avi-muted); font-size:.94rem; }
-    .avi-role-pill { padding:.42rem .72rem; border-radius:999px; background:var(--avi-mint); color:var(--avi-forest); font-size:.78rem; font-weight:700; white-space:nowrap; }
-    [data-testid="stMetric"] {
-      padding:1rem 1.15rem; border:1px solid var(--avi-line); border-radius:16px;
-      background:var(--avi-paper); box-shadow:0 5px 18px rgba(30,55,41,.035);
-    }
-    [data-testid="stMetricLabel"] { color:var(--avi-muted); font-weight:600; }
-    [data-testid="stMetricValue"] { color:var(--avi-forest); font-weight:750; }
-    .stButton > button, [data-testid="stFormSubmitButton"] > button {
-      border-radius:10px; font-weight:650; transition:all .16s ease;
-    }
-    .stButton > button[kind="primary"], [data-testid="stFormSubmitButton"] > button[kind="primary"] {
-      background:var(--avi-green); border-color:var(--avi-green); color:white;
-    }
-    .stButton > button:hover, [data-testid="stFormSubmitButton"] > button:hover { transform:translateY(-1px); }
-    [data-testid="stDataFrame"], [data-testid="stTable"] { border:1px solid var(--avi-line); border-radius:14px; overflow:hidden; }
-    [data-testid="stForm"] { padding:1.1rem; border:1px solid var(--avi-line); border-radius:16px; background:#fff; }
-    [data-testid="stTextInput"] input, [data-testid="stNumberInput"] input, [data-testid="stDateInput"] input,
-    [data-testid="stSelectbox"] [data-baseweb="select"] > div { border-radius:10px; }
-    .avi-section-label { margin:.6rem 0 .25rem; color:var(--avi-muted); font-size:.67rem; font-weight:700; letter-spacing:.11em; text-transform:uppercase; }
-    @media (max-width: 760px) {
-      .block-container { padding:1.1rem .9rem 2rem; }
-      .avi-hero { align-items:flex-start; flex-direction:column; padding:1.1rem; }
-    }
-    </style>
-    """,
-    unsafe_allow_html=True,
-)
+st.markdown(get_theme_css(), unsafe_allow_html=True)
 
 def configuracion(nombre):
     valor = os.environ.get(nombre, "").strip()
@@ -329,27 +249,28 @@ if st.sidebar.button("Cerrar sesión", use_container_width=True):
 if "opcion_nav" not in st.session_state:
     st.session_state["opcion_nav"] = "📊 Overview General"
 
-if st.sidebar.button("Inicio", use_container_width=True):
+if st.sidebar.button("Inicio", type="primary" if st.session_state["opcion_nav"] == "📊 Overview General" else "secondary", use_container_width=True):
     st.session_state["opcion_nav"] = "📊 Overview General"
 
-with st.sidebar.expander("📝 Registros / Operación", expanded=True):
-    if st.button("1. Granjas", use_container_width=True):
+with st.sidebar.container():
+    st.markdown('<div class="avi-section-label">Producción</div>', unsafe_allow_html=True)
+    if st.button("Granjas", type="primary" if st.session_state["opcion_nav"] == "1. Granjas" else "secondary", use_container_width=True):
         st.session_state["opcion_nav"] = "1. Granjas"
         st.session_state["ver_formulario_granja"] = False
-    if st.button("2. Galpones", use_container_width=True):
+    if st.button("Galpones", type="primary" if st.session_state["opcion_nav"] == "2. Galpones" else "secondary", use_container_width=True):
         st.session_state["opcion_nav"] = "2. Galpones"
         st.session_state["ver_formulario_galpon"] = False
         st.session_state["galpon_a_editar"] = None
-    if st.button("3. Lotes", use_container_width=True):
+    if st.button("Lotes", type="primary" if st.session_state["opcion_nav"] == "3. Lotes" else "secondary", use_container_width=True):
         st.session_state["opcion_nav"] = "3. Lotes"
         st.session_state["ver_formulario_lote"] = False
         st.session_state["lote_a_editar"] = None
-    if st.button("4. Ingreso Diario", use_container_width=True):
+    if st.button("Jornada", type="primary" if st.session_state["opcion_nav"] == "4. Ingreso Diario" else "secondary", use_container_width=True):
         st.session_state["opcion_nav"] = "4. Ingreso Diario"
-    if st.button("5. Centro de operación", use_container_width=True):
+    if st.button("Centro de operación", type="primary" if st.session_state["opcion_nav"] == "Centro de operación" else "secondary", use_container_width=True):
         st.session_state["opcion_nav"] = "Centro de operación"
 
-if current_role in ("owner", "admin", "analyst") and st.sidebar.button("Análisis gerencial", use_container_width=True):
+if current_role in ("owner", "admin", "analyst") and st.sidebar.button("Análisis gerencial", type="primary" if st.session_state["opcion_nav"] == "📈 Análisis Gerencial" else "secondary", use_container_width=True):
     st.session_state["opcion_nav"] = "📈 Análisis Gerencial"
 
 with st.sidebar.expander("Cuenta y organización", expanded=False):
@@ -369,7 +290,7 @@ page_meta = {
     "1. Granjas": ("Operación", "Granjas", "Ubicaciones y datos principales de tus granjas."),
     "2. Galpones": ("Operación", "Galpones", "Capacidad e infraestructura de producción."),
     "3. Lotes": ("Producción", "Lotes", "Alojamiento, genética y distribución de aves."),
-    "4. Ingreso Diario": ("Producción", "Registro diario", "Jornada, borradores y revisión de datos productivos."),
+    "4. Ingreso Diario": ("Producción", "Jornada", "Registra, revisa y envía los datos de cada lote."),
     "Centro de operación": ("Trabajo diario", "Centro de operación", "Eventos, agenda, inventarios y trazabilidad de cada producción."),
     "📈 Análisis Gerencial": ("Inteligencia productiva", "Análisis gerencial", "Indicadores para entender la evolución de tu producción."),
 }
@@ -724,7 +645,33 @@ elif opcion == "📊 Overview General":
     granjas = {lote["galpones"]["granjas"]["id"] for lote in activos}
     galpones = {lote["galpones"]["id"] for lote in activos}
 
-    st.subheader("Producción en curso")
+    st.subheader("¿Qué necesitas hacer hoy?")
+    st.caption(f"{hoy.strftime('%d/%m/%Y')} · Elige una tarea para continuar con tu producción.")
+    accesos = st.columns(3)
+    if accesos[0].button("Registrar jornada" if current_role != "analyst" else "Consultar jornada",
+                         type="primary", use_container_width=True, key="avi_home_daily"):
+        st.session_state["opcion_nav"] = "4. Ingreso Diario"
+        st.rerun()
+    if accesos[1].button("Ver agenda", use_container_width=True, key="avi_home_agenda"):
+        st.session_state["opcion_nav"] = "Centro de operación"
+        st.session_state["op_workspace_section"] = "Agenda e incidencias"
+        st.rerun()
+    if current_role in ("owner", "admin", "analyst") and accesos[2].button(
+        "Comparar lotes", use_container_width=True, key="avi_home_analysis"
+    ):
+        st.session_state["opcion_nav"] = "📈 Análisis Gerencial"
+        st.rerun()
+    en_fecha = [lote for lote in activos if str(lote["fecha_encaste"]) <= str(hoy)]
+    enviados_hoy = {fila["lote_id"] for fila in diarios if str(fila["fecha"])[:10] == str(hoy)}
+    con_envio_hoy = len(enviados_hoy.intersection(lote["id"] for lote in en_fecha))
+    if en_fecha:
+        st.progress(con_envio_hoy / len(en_fecha), text=f"{con_envio_hoy} de {len(en_fecha)} lotes con jornada enviada hoy")
+        if con_envio_hoy < len(en_fecha):
+            st.caption("Los lotes sin envío pueden estar pendientes o en borrador. Abre Jornada para ver su estado y continuar.")
+    else:
+        st.info("Todavía no hay lotes alojados disponibles para la jornada. Configura tu estructura en Granjas y Lotes.")
+
+    st.subheader("Tu producción en cifras")
     columnas = st.columns(4)
     columnas[0].metric("Lotes activos", len(activos))
     columnas[1].metric("Aves vivas estimadas", f"{aves_vivas:,}")

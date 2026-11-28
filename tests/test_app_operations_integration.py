@@ -82,12 +82,18 @@ class FakeClient:
         return Query(self, name)
 
 
+class NavigationRequested(Exception):
+    pass
+
+
 class UI:
     def __init__(self, choices=None):
         self.choices = choices or {}
         self.metrics = {}
         self.tables = []
         self.messages = []
+        self.session_state = {}
+        self.progress_value = None
 
     def __enter__(self):
         return self
@@ -97,6 +103,16 @@ class UI:
 
     def columns(self, count):
         return [self] * (count if isinstance(count, int) else len(count))
+
+    def button(self, label, **kwargs):
+        return self.choices.get('click') == kwargs.get('key', label)
+
+    def rerun(self):
+        raise NavigationRequested()
+
+    def progress(self, value, **kwargs):
+        self.progress_value = value
+        self.messages.append(kwargs.get('text', ''))
 
     def metric(self, title, value, *args, **kwargs):
         self.metrics[title] = value
@@ -140,7 +156,7 @@ class AppOperationsTests(unittest.TestCase):
     def ns(self, rows, ui=None):
         namespace = {'supabase': FakeClient(rows), 'organization_id': 'org-a',
                      'datetime': datetime, 'timedelta': timedelta, 'ZoneInfo': ZoneInfo,
-                     'pd': pd, 'build_production_series': build_production_series, 'st': ui or UI()}
+                     'pd': pd, 'build_production_series': build_production_series, 'st': ui or UI(), 'current_role': 'admin'}
         exec(self.helper_code, namespace)
         return namespace
 
@@ -231,6 +247,16 @@ class AppOperationsTests(unittest.TestCase):
         self.assertTrue(all('fcr_acumulado' != m[0] for m in metrics))
         self.assertTrue(any('cada indicador' in text for text in ui.messages))
 
+    def test_overview_shortcuts_open_capture_and_agenda_without_writing(self):
+        for action, expected in [('avi_home_daily', '4. Ingreso Diario'), ('avi_home_agenda', 'Centro de operación')]:
+            ui = UI({'click': action})
+            ns = self.ns({'lotes': [self.lot()]}, ui)
+            with self.assertRaises(NavigationRequested):
+                self.run_view('📊 Overview General', ns)
+            self.assertEqual(ui.session_state['opcion_nav'], expected)
+            if action == 'avi_home_agenda':
+                self.assertEqual(ui.session_state['op_workspace_section'], 'Agenda e incidencias')
+
     def test_overview_ignores_withdrawn_daily_and_accounts_sales(self):
         today = datetime.now(ZoneInfo('America/Bogota')).date()
         records = [self.daily(1, status='submitted', fecha=today.isoformat(), mortalidad_hembra=2),
@@ -246,6 +272,8 @@ class AppOperationsTests(unittest.TestCase):
         self.assertEqual(ui.metrics['Aves vivas estimadas'], '78')
         self.assertEqual(ui.metrics['Mortalidad registrada'], '2')
         self.assertEqual(ui.metrics['Alimento registrado'], '10 kg')
+        self.assertEqual(ui.progress_value, 1)
+        self.assertTrue(any('1 de 1 lotes' in message for message in ui.messages))
 
 
 if __name__ == '__main__':

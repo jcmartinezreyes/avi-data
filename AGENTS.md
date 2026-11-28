@@ -156,6 +156,16 @@ Antes de integrar, el coordinador debe:
 Crear un registro de decisiones o de tareas adicional solo cuando la complejidad
 lo requiera o el usuario lo pida. Mantener este archivo enfocado en reglas estables.
 
+## Lista de agentes al cerrar cada tarea
+
+Al finalizar cada tarea, terminar la respuesta al propietario con una lista breve
+de los agentes y sus especialidades, para facilitar la elección de la próxima
+misión. Incluir los roles de AviLab definidos en `avilab/REGLAS.md`, los
+especialistas de backend/Supabase e interfaz y Antigravity (solo reportes de
+auditoría). Unificar roles equivalentes para evitar duplicados. Presentarlos como
+roles disponibles, sin afirmar que están ejecutándose. Mostrar esta lista no
+activa agentes ni autoriza una nueva misión.
+
 ## AviLab: equipo bajo activación manual
 
 AviLab está definido en `avilab/REGLAS.md` y permanece inactivo por defecto.
