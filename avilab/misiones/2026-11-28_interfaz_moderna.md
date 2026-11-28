@@ -1,6 +1,6 @@
 # Misión: interfaces modernas para AviData
 
-Fecha: 28 de noviembre de 2026. Estado: EN EJECUCIÓN.
+Fecha: 28 de noviembre de 2026. Estado: CERRADA.
 Autorización: el propietario solicita investigación de producto en la web y
 referencias, evaluación de facilidad de uso e implementación de interfaz.
 
@@ -19,3 +19,12 @@ conservando una entrega revisable y la procedencia de las decisiones de diseño.
 
 Parada: entregar implementación verificada, reporte de fuentes/decisiones y
 limitaciones; AviLab vuelve a inactivo, sin tareas periódicas.
+
+## Cierre
+
+Investigación, evaluación e implementación entregadas. Código publicado en main
+mediante b673eb3ac011336ea32a2576334939304fb84ac0 y verificado en Safari:
+acceso, accesos de Inicio, Jornada guiada y siete áreas visibles. Suite: 62 pruebas
+aprobadas. Vista aislada móvil 360 × 800 y escritorio inspeccionados.
+No se modificó Supabase ni se introdujeron datos de prueba en producción.
+AviLab vuelve a inactivo; no quedan reactivaciones ni ejecuciones periódicas.

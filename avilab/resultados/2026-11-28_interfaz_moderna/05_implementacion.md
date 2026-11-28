@@ -48,3 +48,14 @@ ausencia, sexo recibido por transferencia, primer box pendiente, bloqueo de env�
 incompleto, permanencia del mensaje de guardado, recarga que descarta una edición
 local y asignación de columnas/unidades con confirmación de importación.
 No se añadieron dependencias ni servicios externos para el diseño.
+
+## Publicación y revisión final
+
+Código integrado en main: b673eb3ac011336ea32a2576334939304fb84ac0.
+La aplicación https://avidata.streamlit.app/ se comprobó en Safari después del
+despliegue: acceso de la cuenta autorizada, accesos Registrar jornada/Ver agenda/
+Comparar lotes en Inicio, Jornada con primer box pendiente abierto y siete áreas
+visibles mediante selección nativa. No se enviaron formularios productivos.
+Las capturas nativas oblicuas de Safari se complementaron con las capturas
+rectas de la vista aislada en el navegador integrado. La vista temporal se cerró
+y su tamaño de viewport se restauró. La misión queda cerrada y AviLab inactivo.
